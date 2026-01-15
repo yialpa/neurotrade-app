@@ -1,0 +1,26 @@
+name: 7/24 Bot Devriyesi
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # Her saat başı çalışır (Örn: 14:00, 15:00...)
+  workflow_dispatch:      # İstediğin zaman elle tetiklemek için
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Depoyu Çek
+        uses: actions/checkout@v2
+
+      - name: Python Kur
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.9'
+
+      - name: Kütüphaneleri Yükle
+        run: |
+          pip install ccxt pandas pandas_ta requests
+
+      - name: Botu Çalıştır
+        run: python beyin.py
