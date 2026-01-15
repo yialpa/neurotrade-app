@@ -18,11 +18,22 @@ st.markdown("""
     .stApp {background-color: #0E1117;}
     .metric-card {background-color: #1E1E1E; border: 1px solid #333; padding: 10px; border-radius: 5px;}
     h1, h2, h3 {font-family: 'Helvetica Neue', sans-serif;}
+    /* Telegram Butonu İçin Özel Stil */
+    .stLinkButton > a {
+        background-color: #229ED9;
+        color: white;
+        border: none;
+        width: 100%;
+        text-align: center;
+        font-weight: bold;
+    }
+    .stLinkButton > a:hover {
+        background-color: #1E88BC;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # --- AYARLAR ---
-# Listeyi biraz azalttık ki daha garanti çalışsın
 TARANACAK_COINLER = [
     'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'XRP/USDT', 
     'ADA/USDT', 'DOGE/USDT', 'AVAX/USDT'
@@ -32,10 +43,18 @@ TARANACAK_COINLER = [
 st.sidebar.title("💎 NeuroTrade Pro")
 st.sidebar.markdown("---")
 
+# --- BURASI YENİ EKLENDİ (TELEGRAM BUTONU) ---
+st.sidebar.markdown("### 🚀 Topluluğa Katıl")
+st.sidebar.info("Anlık sinyaller ve sohbet için VIP gruba gel.")
+# AŞAĞIDAKİ LİNKİ KENDİ KANAL LİNKİNLE DEĞİŞTİR:
+st.sidebar.link_button("📢 TELEGRAM'A GİT", "https://t.me/+0ati3BgBwHJlNTI0") 
+st.sidebar.markdown("---")
+# ---------------------------------------------
+
 mod = st.sidebar.radio("Çalışma Modu", ["📊 Tekli Analiz", "🔍 Market Tarayıcı"])
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("📡 Telegram Ayarları")
+st.sidebar.subheader("📡 Sinyal Botu Ayarları")
 tg_token = st.sidebar.text_input("Bot Token", type="password")
 tg_chat_id = st.sidebar.text_input("Chat ID")
 
@@ -54,11 +73,8 @@ def telegram_gonder(token, chat_id, mesaj):
         st.error("Gönderim Hatası")
 
 def veri_getir(sembol, periyot='4h', limit=100):
-    # Kraken kullanıyoruz (Daha az blokluyor)
     try:
-        # BinanceUS yerine Kraken deneyelim, bazen daha stabil
         exchange = ccxt.kraken() 
-        # Kraken sembolleri bazen farklıdır, o yüzden BinanceUS'e geri dönüyoruz ama yavaşlatarak
         exchange = ccxt.binanceus({'enableRateLimit': True})
         
         bars = exchange.fetch_ohlcv(sembol, timeframe=periyot, limit=limit)
@@ -76,7 +92,7 @@ def veri_getir(sembol, periyot='4h', limit=100):
         
         return df
     except Exception as e:
-        print(f"Hata ({sembol}): {e}") # Loglara hatayı yaz
+        print(f"Hata ({sembol}): {e}") 
         return pd.DataFrame()
 
 # --- MOD 1: TEKLİ ANALİZ ---
@@ -117,7 +133,7 @@ if mod == "📊 Tekli Analiz":
 # --- MOD 2: MARKET TARAYICI ---
 elif mod == "🔍 Market Tarayıcı":
     st.title("🔍 Kripto Radar")
-    st.info("Listedeki coinler taranıyor... Her coin için 1 saniye beklenir (Güvenlik gereği).")
+    st.info("Listedeki coinler taranıyor... Her coin için 1 saniye beklenir.")
     
     periyot_scan = st.selectbox("Tarama Periyodu", ["4h", "1h", "1d"])
     
@@ -126,7 +142,6 @@ elif mod == "🔍 Market Tarayıcı":
         firsatlar = []
         
         for i, coin in enumerate(TARANACAK_COINLER):
-            # İlerleme mesajı
             st.write(f"⏳ {coin} taranıyor...")
             
             df = veri_getir(coin, periyot_scan, 100)
@@ -152,8 +167,6 @@ elif mod == "🔍 Market Tarayıcı":
                 st.write(f"❌ {coin} verisi alınamadı.")
             
             bar.progress((i + 1) / len(TARANACAK_COINLER))
-            
-            # BURASI ÇOK ÖNEMLİ: HIZ LİMİTİNE TAKILMAMAK İÇİN 1 SANİYE BEKLEME
             time.sleep(1.0)
             
         st.success("Tarama Tamamlandı!")
