@@ -2,7 +2,7 @@ name: 7/24 Bot Devriyesi
 
 on:
   schedule:
-    - cron: '0 * * * *'  # Her saat başı çalışır
+    - cron: '0 * * * *'  # Her saat başı
   workflow_dispatch:      # Elle tetiklemek için
 
 jobs:
@@ -10,34 +10,19 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Kendi kodlarımızı çekiyoruz
-      - name: Ana Depoyu Cek
+      - name: Depoyu Çek
         uses: actions/checkout@v3
 
-      # 2. Pandas-TA kütüphanesini 'Yan Kapıdan' güvenli çekiyoruz
-      - name: Pandas-TA Kutuphanesini Indir
-        uses: actions/checkout@v3
-        with:
-          repository: twopirllc/pandas-ta
-          path: pandas-ta-lib
-
-      # 3. Python Kuruyoruz
       - name: Python Kur
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      # 4. Kurulumları Yapıyoruz
       - name: Kutuphaneleri Kur
         run: |
           pip install --upgrade pip
-          # Numpy uyumluluğu için
-          pip install "numpy<2"
-          # Temel araçlar
+          # Sadece temel kütüphaneler yeterli, Pandas-TA'yı sildik!
           pip install ccxt requests pandas
-          # İndirdiğimiz klasörden Pandas-TA'yı kuruyoruz
-          pip install ./pandas-ta-lib
 
-      # 5. Botu Başlatıyoruz
       - name: Botu Calistir
         run: python beyin.py
