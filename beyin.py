@@ -1,3 +1,5 @@
+import ccxt
+import pandas as pd
 import requests
 import time
 import feedparser
@@ -60,7 +62,7 @@ def gecmis_hatalari_kontrol_et(hafiza, coin, suanki_fiyat):
     if gecen_sure < timedelta(hours=CEZA_SURESI_SAAT):
         giris = float(son_islem.get('giris', 0))
         yon = son_islem.get('sinyal')
-        # Terste miyiz?
+        
         if yon == "LONG 🟢" and suanki_fiyat < giris * 0.99:
             return True, "🚫 Bot bu coinde terste kaldı. İnatlaşmıyor."
         if yon == "SHORT 🔴" and suanki_fiyat > giris * 1.01:
@@ -114,29 +116,18 @@ def teknik_analiz(exchange, coin, df, btc_degisim):
     df['ATR'] = df['high'] - df['low']
     son_fiyat = df['close'].iloc[-1]
     
-    # 1. GÖSTERGELERİ HESAPLA
-    # EMA 50 (Trend Desteği)
+    # GÖSTERGELER
     df['ema50'] = df['close'].ewm(span=50).mean()
-    # EMA 20 (Hızlı Trend)
     df['ema20'] = df['close'].ewm(span=20).mean()
-    # RSI
     df['rsi'] = calculate_rsi(df['close'])
     
-    # BOS (Market Structure) İçin Zirve ve Dipler
-    # Son 20 mumun en yükseği ve en düşüğü
-    df['highest_20'] = df['high'].rolling(window=20).max().shift(1) # Bir önceki mumun zirvesi
+    df['highest_20'] = df['high'].rolling(window=20).max().shift(1)
     df['lowest_20'] = df['low'].rolling(window=20).min().shift(1)
     
-    # Balina
     hacim_ort = df['volume'].rolling(window=20).mean().iloc[-1]
     son_hacim = df['volume'].iloc[-1]
     balina_notu = "🐋 **BALİNA ALARMI**" if son_hacim > (hacim_ort * 3.0) else ""
 
-    # ICT / Price Action
-    fvg_bull = (df['high'].shift(2) < df['low']) & (df['close'].shift(1) > df['open'].shift(1))
-    fvg_bear = (df['low'].shift(2) > df['high']) & (df['close'].shift(1) < df['open'].shift(1))
-
-    # --- KARAR MEKANİZMASI (SMC & BOS) ---
     sinyal = None
     tip = "Swing" if "4h" in str(df.name) else "Scalp"
     sl = 0.0
@@ -150,37 +141,25 @@ def teknik_analiz(exchange, coin, df, btc_degisim):
     lowest_val = df['lowest_20'].iloc[-1]
 
     # LONG KRİTERLERİ 🟢
-    # 1. Trend Yukarı mı? (EMA 20 > EMA 50)
-    # 2. RSI Uygun mu? (50 < RSI < 75) - Aşırı şişmemiş
     if ema20_val > ema50_val and 45 < current_rsi < 75 and btc_degisim > -3.0:
-        
-        # A) BOS (Break of Structure): Fiyat önceki tepeyi kırdı mı?
         if son_fiyat > highest_val:
             sinyal = "LONG 🟢"
             setup_info = "BOS (Yapı Kırılımı)"
             sl = son_fiyat - (df['ATR'].iloc[-1] * 1.5)
             tp = son_fiyat + ((son_fiyat - sl) * RISK_REWARD_RATIO)
-            
-        # B) Trend Teması (Retest): Fiyat EMA 50'ye değdi mi?
-        elif abs(son_fiyat - ema50_val) / son_fiyat < 0.01: # %1 yakınlık
+        elif abs(son_fiyat - ema50_val) / son_fiyat < 0.01:
             sinyal = "LONG 🟢"
             setup_info = "Trend Desteği (Retest)"
             sl = son_fiyat - (df['ATR'].iloc[-1] * 1.5)
             tp = son_fiyat + ((son_fiyat - sl) * RISK_REWARD_RATIO)
 
     # SHORT KRİTERLERİ 🔴
-    # 1. Trend Aşağı mı?
-    # 2. RSI Uygun mu? (25 < RSI < 55)
     elif ema20_val < ema50_val and 25 < current_rsi < 55:
-        
-        # A) Bearish BOS: Fiyat önceki dibi kırdı mı?
         if son_fiyat < lowest_val:
             sinyal = "SHORT 🔴"
             setup_info = "BOS (Aşağı Kırılım)"
             sl = son_fiyat + (df['ATR'].iloc[-1] * 1.5)
             tp = son_fiyat - ((sl - son_fiyat) * RISK_REWARD_RATIO)
-
-        # B) Direnç Teması
         elif abs(son_fiyat - ema50_val) / son_fiyat < 0.01:
             sinyal = "SHORT 🔴"
             setup_info = "Trend Direnci (Retest)"
@@ -207,14 +186,12 @@ def calistir():
     for coin in hedef_coinler:
         for tf in TARAMA_PERIYOTLARI:
             try:
-                # BOS ve EMA 50 için geçmiş veriye ihtiyaç var (200 mum iyidir)
                 bars = exchange.fetch_ohlcv(coin, timeframe=tf, limit=200)
                 df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 df.name = tf
                 
                 fiyat = df['close'].iloc[-1]
 
-                # Hata Kontrolü
                 hatali_mi, hata_mesaji = gecmis_hatalari_kontrol_et(hafiza, coin, fiyat)
                 if hatali_mi:
                     print(f"{hata_mesaji} ({coin})")
