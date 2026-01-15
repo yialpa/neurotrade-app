@@ -47,7 +47,7 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### 🚀 Topluluğa Katıl")
 st.sidebar.info("Anlık sinyaller ve sohbet için VIP gruba gel.")
 # AŞAĞIDAKİ LİNKİ KENDİ KANAL LİNKİNLE DEĞİŞTİR:
-st.sidebar.link_button("📢 TELEGRAM'A GİT", "https://t.me/+0ati3BgBwHJlNTI0") 
+st.sidebar.link_button("📢 TELEGRAM'A GİT", "https://t.me/NeuroTradeapp") 
 st.sidebar.markdown("---")
 # ---------------------------------------------
 
@@ -190,3 +190,4 @@ elif mod == "🔍 Market Tarayıcı":
                 st.dataframe(sonuc_df)
         else:
             st.warning("Veri çekilemedi. Sunucu çok yoğun olabilir.")
+
