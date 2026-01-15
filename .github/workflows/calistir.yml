@@ -2,7 +2,7 @@ name: 7/24 Bot Devriyesi
 
 on:
   schedule:
-    - cron: '0 * * * *'  # Her saat başı
+    - cron: '0 * * * *'  # Her saat başı çalışır
   workflow_dispatch:      # Elle tetiklemek için
 
 jobs:
@@ -21,8 +21,8 @@ jobs:
       - name: Kutuphaneleri Kur
         run: |
           pip install --upgrade pip
-          # Sadece temel kütüphaneler yeterli, Pandas-TA'yı sildik!
-          pip install ccxt requests pandas
+          # Haberler ve analiz için gerekli ek kütüphaneler eklendi
+          pip install ccxt requests pandas feedparser textblob
 
       - name: Botu Calistir
         run: python beyin.py
