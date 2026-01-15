@@ -25,7 +25,6 @@ def telegram_gonder(mesaj):
 # --- 1. MODÜL: BTC PATRON KONTROLÜ ---
 def btc_durumu(exchange):
     try:
-        # Binance US'de bazen ticker sembolleri farklı olabilir, try ile deniyoruz
         ticker = exchange.fetch_ticker('BTC/USDT')
         degisim = ticker['percentage']
         fiyat = ticker['last']
@@ -80,24 +79,20 @@ def teknik_analiz(exchange, coin, df, btc_degisim):
     df['ATR'] = df['high'] - df['low']
     son_fiyat = df['close'].iloc[-1]
     
-    # 1. BALİNA KONTROLÜ
+    # Balina ve ADX
     hacim_ort = df['volume'].rolling(window=20).mean().iloc[-1]
     son_hacim = df['volume'].iloc[-1]
     balina_notu = "🐋 **BALİNA ALARMI**" if son_hacim > (hacim_ort * 3.0) else ""
-
-    # 2. ADX TREND KONTROLÜ
     adx_degeri = calculate_adx(df)
     
-    # Ölü Piyasa Filtresi (ADX < 20)
     if adx_degeri < 20:
+        # Ölü piyasa ise boş dön
         return None, None, 0, 0, None, None
 
-    # 3. FUNDING RATE (Opsiyonel - Binance US'de funding verisi bazen eksik olabilir)
-    # Hata almamak için burayı basitleştirdik
     funding_rate = 0
     funding_yorum = "Nötr"
 
-    # 4. ICT & PRICE ACTION
+    # ICT
     destek = df['low'].rolling(window=50).min().iloc[-1]
     direnc = df['high'].rolling(window=50).max().iloc[-1]
     dist_to_supp = (son_fiyat - destek) / son_fiyat
@@ -106,10 +101,13 @@ def teknik_analiz(exchange, coin, df, btc_degisim):
     fvg_bull = (df['high'].shift(2) < df['low']) & (df['close'].shift(1) > df['open'].shift(1))
     fvg_bear = (df['low'].shift(2) > df['high']) & (df['close'].shift(1) < df['open'].shift(1))
 
+    # --- DEĞİŞKENLERİ BAŞTAN TANIMLIYORUZ (HATA BURADAYDI) ---
     sinyal = None
     tip = "Swing" if "4h" in str(df.name) else "Scalp"
+    sl = 0.0
+    tp = 0.0
 
-    # LONG SENARYOSU (BTC Filtresi Aktif)
+    # LONG SENARYOSU
     if (dist_to_supp < 0.02 or fvg_bull.iloc[-1]) and btc_degisim > -3.0:
         sinyal = "LONG 🟢"
         sl = son_fiyat - (df['ATR'].iloc[-1] * 1.5)
@@ -125,7 +123,6 @@ def teknik_analiz(exchange, coin, df, btc_degisim):
 
 # --- ANA MOTOR ---
 def calistir():
-    # KRİTİK DEĞİŞİKLİK: ccxt.binanceus() kullanıyoruz (GitHub ABD sunucuları için)
     exchange = ccxt.binanceus() 
     market_duygusu = piyasa_duygusunu_olc()
     btc_degisim, btc_fiyat = btc_durumu(exchange)
@@ -133,7 +130,6 @@ def calistir():
     print(f"🌍 Piyasa Modu: {market_duygusu}")
     print(f"👑 BTC Durumu: ${btc_fiyat} (%{btc_degisim:.2f})")
     
-    # Binance US'de olan coinler
     hedef_coinler = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'AVAX/USDT', 'DOGE/USDT', 'LTC/USDT', 'LINK/USDT']
     raporlar = []
 
