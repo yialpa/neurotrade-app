@@ -21,7 +21,7 @@ TARAMA_PERIYOTLARI = ['4h', '1h']
 RISK_REWARD_RATIO = 2.0 
 HAFIZA_SURESI_SAAT = 4 
 CEZA_SURESI_SAAT = 6 
-KARI_KITLE_YUZDE = 1.5 # %1.5 kârda stopu girişe çeker
+KARI_KITLE_YUZDE = 1.5 
 
 def telegram_gonder(mesaj):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -51,12 +51,11 @@ def hafiza_kaydet(hafiza):
     except:
         pass
 
-# --- YENİ: GÜNLÜK RAPOR MODÜLÜ ---
+# --- GÜNLÜK RAPOR MODÜLÜ ---
 def gunluk_rapor_kontrol(hafiza, market_duygusu, btc_fiyat):
     bugun = datetime.now().strftime("%Y-%m-%d")
     son_rapor = hafiza.get("son_rapor_tarihi", "")
     
-    # Eğer bugün rapor atmadıysa AT
     if son_rapor != bugun:
         mesaj = f"📅 **GÜNLÜK PATRON RAPORU**\n\n"
         mesaj += f"✅ **Sistem:** Aktif ve Çalışıyor\n"
@@ -67,37 +66,40 @@ def gunluk_rapor_kontrol(hafiza, market_duygusu, btc_fiyat):
         
         telegram_gonder(mesaj)
         hafiza["son_rapor_tarihi"] = bugun
-        return True # Hafıza güncellendi
+        return True 
     return False
 
-# --- YENİ: KÂRI KİTLEME (TRAILING) MODÜLÜ ---
+# --- KÂRI KİTLEME (TRAILING) MODÜLÜ (DÜZELTİLDİ) ---
 def pozisyon_takip(exchange, hafiza):
     degisiklik_var = False
     
-    # Hafızadaki TÜM kayıtları gez
-    keys = list(hafiza.keys()) # Kopyasını alıyoruz ki loop bozulmasın
+    keys = list(hafiza.keys()) 
     for key in keys:
-        if "_" not in key: continue # Sistem ayarları (tarih vs) ise geç
-        
         veri = hafiza[key]
-        coin_full = key.split("_")[0] # BTC/USDT
+        
+        # --- DÜZELTME BURADA: Veri bir sözlük (Dictionary) değilse atla ---
+        if not isinstance(veri, dict):
+            continue 
+        
+        coin_full = key.split("_")[0] 
         sinyal_tipi = veri.get('sinyal')
         giris_fiyati = veri.get('giris')
         zaman_str = veri.get('zaman')
-        kilitlendi = veri.get('kilitlendi', False) # Zaten kilitledik mi?
+        kilitlendi = veri.get('kilitlendi', False) 
         
         if not giris_fiyati or kilitlendi: continue
 
-        # İşlem çok eskiyse (24 saatten fazla) takibi bırak
-        islem_zamani = datetime.strptime(zaman_str, "%Y-%m-%d %H:%M:%S")
-        if (datetime.now() - islem_zamani).total_seconds() > 86400: continue
+        # İşlem eskiyse geç
+        try:
+            islem_zamani = datetime.strptime(zaman_str, "%Y-%m-%d %H:%M:%S")
+            if (datetime.now() - islem_zamani).total_seconds() > 86400: continue
+        except:
+            continue
 
         try:
-            # Güncel fiyatı çek
             ticker = exchange.fetch_ticker(coin_full)
             guncel_fiyat = ticker['last']
             
-            # LONG İÇİN KONTROL
             if sinyal_tipi == "LONG 🟢":
                 kar_orani = ((guncel_fiyat - giris_fiyati) / giris_fiyati) * 100
                 if kar_orani >= KARI_KITLE_YUZDE:
@@ -105,7 +107,6 @@ def pozisyon_takip(exchange, hafiza):
                     hafiza[key]['kilitlendi'] = True
                     degisiklik_var = True
             
-            # SHORT İÇİN KONTROL
             elif sinyal_tipi == "SHORT 🔴":
                 kar_orani = ((giris_fiyati - guncel_fiyat) / giris_fiyati) * 100
                 if kar_orani >= KARI_KITLE_YUZDE:
@@ -118,9 +119,9 @@ def pozisyon_takip(exchange, hafiza):
             
     return degisiklik_var
 
-# --- DİĞER FONKSİYONLAR (BEYİN) ---
+# --- DİĞER MODÜLLER ---
 def gecmis_hatalari_kontrol_et(hafiza, coin, suanki_fiyat):
-    ilgili_kayitlar = [val for key, val in hafiza.items() if coin in key]
+    ilgili_kayitlar = [val for key, val in hafiza.items() if coin in key and isinstance(val, dict)]
     if not ilgili_kayitlar: return False, ""
 
     son_islem = sorted(ilgili_kayitlar, key=lambda x: x['zaman'], reverse=True)[0]
@@ -137,6 +138,8 @@ def spam_kontrol(hafiza, coin, sinyal, timeframe):
     key = f"{coin}_{timeframe}"
     if key in hafiza:
         son_veri = hafiza[key]
+        if not isinstance(son_veri, dict): return False
+        
         last_signal = son_veri.get('sinyal')
         last_time = datetime.strptime(son_veri.get('zaman'), "%Y-%m-%d %H:%M:%S")
         if last_signal == sinyal and (datetime.now() - last_time) < timedelta(hours=HAFIZA_SURESI_SAAT):
@@ -191,24 +194,20 @@ def teknik_analiz(exchange, coin, df, btc_degisim):
     ema20_val = df['ema20'].iloc[-1]
     ema50_val = df['ema50'].iloc[-1]
 
-    # STRATEJİ (LONG)
     if ema20_val > ema50_val and 45 < current_rsi < 75 and btc_degisim > -3.0:
         if son_fiyat > df['highest_20'].iloc[-1]:
             sinyal, setup_info = "LONG 🟢", "BOS (Yapı Kırılımı)"
         elif abs(son_fiyat - ema50_val) / son_fiyat < 0.01:
             sinyal, setup_info = "LONG 🟢", "Trend Desteği (Retest)"
-        
         if sinyal:
             sl = son_fiyat - (df['ATR'].iloc[-1] * 1.5)
             tp = son_fiyat + ((son_fiyat - sl) * RISK_REWARD_RATIO)
 
-    # STRATEJİ (SHORT)
     elif ema20_val < ema50_val and 25 < current_rsi < 55:
         if son_fiyat < df['lowest_20'].iloc[-1]:
             sinyal, setup_info = "SHORT 🔴", "BOS (Aşağı Kırılım)"
         elif abs(son_fiyat - ema50_val) / son_fiyat < 0.01:
             sinyal, setup_info = "SHORT 🔴", "Trend Direnci (Retest)"
-            
         if sinyal:
             sl = son_fiyat + (df['ATR'].iloc[-1] * 1.5)
             tp = son_fiyat - ((sl - son_fiyat) * RISK_REWARD_RATIO)
@@ -226,17 +225,17 @@ def calistir():
     
     print(f"🌍 Piyasa: {market_duygusu} | BTC: ${btc_fiyat}")
 
-    # 1. GÜNLÜK RAPOR KONTROLÜ
+    # RAPOR
     if gunluk_rapor_kontrol(hafiza, market_duygusu, btc_fiyat):
         hafiza_degisti = True
         print("📅 Günlük rapor gönderildi.")
 
-    # 2. AÇIK POZİSYON TAKİBİ (Trailing Stop)
+    # TAKİP
     if pozisyon_takip(exchange, hafiza):
         hafiza_degisti = True
-        print("🛡️ Pozisyon takibi yapıldı, güncellemeler var.")
+        print("🛡️ Pozisyon takibi yapıldı.")
 
-    # 3. YENİ FIRSAT TARAMASI
+    # TARAMA
     hedef_coinler = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'AVAX/USDT', 'DOGE/USDT', 'LTC/USDT', 'LINK/USDT', 'XRP/USDT']
     raporlar = []
 
@@ -263,8 +262,7 @@ def calistir():
                     if (sinyal == "LONG 🟢" and market_duygusu == "NEGATIF") or (sinyal == "SHORT 🔴" and market_duygusu == "POZITIF"):
                         continue
 
-                    # YENİ: GRAFİK LİNKİ HAZIRLAMA
-                    symbol_clean = coin.replace('/', '') # BTCUSDT
+                    symbol_clean = coin.replace('/', '')
                     chart_link = f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol_clean}"
 
                     mesaj = f"⚡ **NEUROTRADE {sinyal}** ({tip})\n\n"
@@ -299,7 +297,7 @@ def calistir():
     
     if hafiza_degisti:
         hafiza_kaydet(hafiza)
-        print("💾 Hafıza Güncellendi (Rapor/Takip/Sinyal).")
+        print("💾 Hafıza Güncellendi.")
     else:
         print("💤 Değişiklik yok.")
 
