@@ -1,21 +1,3 @@
-Bu hatanın sebebi çok net: Hız Limiti (Rate Limit).
-
-Biz programa "Bütün coinleri 1 saniye içinde tara" dedik. Binance sunucusu da, "Hop! Sen bir robotsun, çok hızlı istek atıyorsun, seni engelliyorum" dedi. Bu yüzden sana boş veri döndü.
-
-Bunu çözmek için bota "İnsani Davranış" ekleyeceğiz. Her coine baktıktan sonra 1 saniye dinlenecek.
-
-Aşağıdaki V5.4 Kodu ile sorun çözülecek.
-
-Yapman Gerekenler:
-GitHub'da app.py dosyanı aç.
-
-Hepsini sil.
-
-Aşağıdaki kodu yapıştır. (Bu kodda tarama arasına time.sleep(1) koydum, yani 1 saniye bekleyip diğer coine geçecek).
-
-✅ NEUROTRADE V5.4 (Hız Limiti Korumalı)
-Python
-
 import streamlit as st
 import ccxt
 import pandas as pd
