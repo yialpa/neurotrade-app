@@ -6,14 +6,13 @@ import feedparser
 from textblob import TextBlob
 import numpy as np
 
-# --- KİŞİSEL AYARLAR (Otomatik Dolduruldu) ---
+# --- KİŞİSEL AYARLAR ---
 TELEGRAM_TOKEN = "8537277587:AAFxzrDMS0TEun8m7aQmck480iKD2HohtQc" 
 CHAT_ID = "-1003516806415"
 
 # --- STRATEJİ AYARLARI ---
-# Swing için 4h, Scalp için 1h veya 15m kullanır
 TARAMA_PERIYOTLARI = ['4h', '1h'] 
-RISK_REWARD_RATIO = 2.0  # 1 birim riske 2 birim kazanç hedefler
+RISK_REWARD_RATIO = 2.0 
 
 def telegram_gonder(mesaj):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -23,25 +22,30 @@ def telegram_gonder(mesaj):
     except:
         pass
 
-# --- 1. MODÜL: HABER VE DUYGU ANALİZİ (Global Filtre) ---
+# --- 1. MODÜL: BTC PATRON KONTROLÜ ---
+def btc_durumu(exchange):
+    """
+    BTC %3'ten fazla düştüyse piyasa 'KIRMIZI ALARM'dır.
+    """
+    try:
+        ticker = exchange.fetch_ticker('BTC/USDT')
+        degisim = ticker['percentage']
+        fiyat = ticker['last']
+        return degisim, fiyat
+    except:
+        return 0, 0
+
+# --- 2. MODÜL: HABER ANALİZİ ---
 def piyasa_duygusunu_olc():
-    """
-    Piyasa haberlerini okur ve genel bir 'Hava Durumu' çıkarır.
-    Dönüş: 'POZITIF', 'NEGATIF' veya 'NOTR'
-    """
     try:
         url = "https://cointelegraph.com/rss"
         feed = feedparser.parse(url)
         toplam_skor = 0
         haber_sayisi = 0
-        
-        print("Haberler analiz ediliyor...")
-        for entry in feed.entries[:7]: # Son 7 haberi oku
+        for entry in feed.entries[:7]: 
             analiz = TextBlob(entry.title)
-            skor = analiz.sentiment.polarity
-            toplam_skor += skor
+            toplam_skor += analiz.sentiment.polarity
             haber_sayisi += 1
-            
         ortalama_skor = toplam_skor / haber_sayisi if haber_sayisi > 0 else 0
         
         if ortalama_skor > 0.15: return "POZITIF"
@@ -50,67 +54,101 @@ def piyasa_duygusunu_olc():
     except:
         return "NOTR"
 
-# --- 2. MODÜL: TEKNİK ANALİZ (ICT & Price Action) ---
-def teknik_analiz(df):
-    # Temel Veriler
-    df['ATR'] = df['high'] - df['low'] # Basit Volatilite Ölçümü
+# --- YARDIMCI: ADX HESAPLAMA (Trend Gücü) ---
+def calculate_adx(df, period=14):
+    try:
+        df['up'] = df['high'] - df['high'].shift(1)
+        df['down'] = df['low'].shift(1) - df['low']
+        df['+dm'] = np.where((df['up'] > df['down']) & (df['up'] > 0), df['up'], 0)
+        df['-dm'] = np.where((df['down'] > df['up']) & (df['down'] > 0), df['down'], 0)
+        df['tr'] = np.maximum(df['high'] - df['low'], 
+                              np.maximum(abs(df['high'] - df['close'].shift(1)), 
+                                         abs(df['low'] - df['close'].shift(1))))
+        
+        df['tr_s'] = df['tr'].rolling(window=period).sum()
+        df['+dm_s'] = df['+dm'].rolling(window=period).sum()
+        df['-dm_s'] = df['-dm'].rolling(window=period).sum()
+        
+        df['+di'] = 100 * (df['+dm_s'] / df['tr_s'])
+        df['-di'] = 100 * (df['-dm_s'] / df['tr_s'])
+        df['dx'] = 100 * abs((df['+di'] - df['-di']) / (df['+di'] + df['-di']))
+        df['adx'] = df['dx'].rolling(window=period).mean()
+        return df['adx'].iloc[-1]
+    except:
+        return 25 # Hata olursa varsayılan değer
+
+# --- 3. MODÜL: MEGA TEKNİK ANALİZ ---
+def teknik_analiz(exchange, coin, df, btc_degisim):
+    df['ATR'] = df['high'] - df['low']
     son_fiyat = df['close'].iloc[-1]
     
-    # --- ICT: FVG (Fair Value Gap) Tespiti ---
-    # Bullish FVG: Mum 1 High < Mum 3 Low (Arada boşluk var)
-    df['FVG_Bullish'] = (df['high'].shift(2) < df['low']) & (df['close'].shift(1) > df['open'].shift(1))
-    # Bearish FVG: Mum 1 Low > Mum 3 High
-    df['FVG_Bearish'] = (df['low'].shift(2) > df['high']) & (df['close'].shift(1) < df['open'].shift(1))
-    
-    fvg_bull_var = df['FVG_Bullish'].iloc[-1]
-    fvg_bear_var = df['FVG_Bearish'].iloc[-1]
+    # 1. BALİNA KONTROLÜ 🐋
+    hacim_ort = df['volume'].rolling(window=20).mean().iloc[-1]
+    son_hacim = df['volume'].iloc[-1]
+    balina_notu = "🐋 **BALİNA ALARMI**" if son_hacim > (hacim_ort * 3.0) else ""
 
-    # --- Destek / Direnç Tespiti (Son 50 mum) ---
+    # 2. ADX TREND KONTROLÜ 📉
+    adx_degeri = calculate_adx(df)
+    trend_notu = "Güçlü Trend" if adx_degeri > 25 else "Zayıf Trend"
+    
+    # Eğer Trend çok zayıfsa (ADX < 20) işlem açma (Ölü Piyasa)
+    if adx_degeri < 20:
+        return None, None, 0, 0, None, None
+
+    # 3. FUNDING RATE (TERS KÖŞE) 😈
+    try:
+        funding_info = exchange.fetch_funding_rate(coin)
+        funding_rate = funding_info['fundingRate'] * 100 # Yüzdeye çevir
+        funding_yorum = "Aşırı Long" if funding_rate > 0.01 else ("Aşırı Short" if funding_rate < -0.01 else "Nötr")
+    except:
+        funding_rate = 0
+        funding_yorum = "Nötr"
+
+    # 4. ICT & PRICE ACTION
     destek = df['low'].rolling(window=50).min().iloc[-1]
     direnc = df['high'].rolling(window=50).max().iloc[-1]
-    
     dist_to_supp = (son_fiyat - destek) / son_fiyat
     dist_to_res = (direnc - son_fiyat) / son_fiyat
+    
+    # FVG Tespiti
+    fvg_bull = (df['high'].shift(2) < df['low']) & (df['close'].shift(1) > df['open'].shift(1))
+    fvg_bear = (df['low'].shift(2) > df['high']) & (df['close'].shift(1) < df['open'].shift(1))
 
-    # --- Sinyal Kararı ---
     sinyal = None
-    setup_tipi = ""
-    stop_loss = 0.0
-    take_profit = 0.0
+    tip = "Swing" if "4h" in str(df.name) else "Scalp"
+
+    # --- KARAR MEKANİZMASI ---
 
     # LONG SENARYOSU
-    # 1. Fiyat Destekte VEYA Bullish FVG içinde
-    # 2. Fiyat Hareketli Ortalamanın (EMA 50) üzerinde (Trend Onayı)
-    ema50 = df['close'].ewm(span=50).mean().iloc[-1]
-    
-    if (dist_to_supp < 0.02 or fvg_bull_var): # Desteğe %2 yakın veya FVG var
-        sinyal = "LONG 🟢"
-        setup_tipi = "Swing" if "4h" in str(df.name) else "Scalp"
-        # Stop Loss: Son mumun en düşüğünün biraz altı veya Destek altı
-        atr = df['ATR'].iloc[-1]
-        stop_loss = son_fiyat - (atr * 1.5) 
-        take_profit = son_fiyat + ((son_fiyat - stop_loss) * RISK_REWARD_RATIO)
+    # Kural: BTC Çakılmıyor olmalı (> -3%) VE (Destek Yakın VEYA FVG Var)
+    if (dist_to_supp < 0.02 or fvg_bull.iloc[-1]) and btc_degisim > -3.0:
+        # Funding Kontrolü: Herkes Aşırı Long ise biz girmeyelim (Tuzak olabilir)
+        if funding_rate < 0.02: 
+            sinyal = "LONG 🟢"
+            sl = son_fiyat - (df['ATR'].iloc[-1] * 1.5)
+            tp = son_fiyat + ((son_fiyat - sl) * RISK_REWARD_RATIO)
 
     # SHORT SENARYOSU
-    elif (dist_to_res < 0.02 or fvg_bear_var):
-        sinyal = "SHORT 🔴"
-        setup_tipi = "Swing" if "4h" in str(df.name) else "Scalp"
-        atr = df['ATR'].iloc[-1]
-        stop_loss = son_fiyat + (atr * 1.5)
-        take_profit = son_fiyat - ((stop_loss - son_fiyat) * RISK_REWARD_RATIO)
+    # Kural: (Direnç Yakın VEYA FVG Var)
+    elif (dist_to_res < 0.02 or fvg_bear.iloc[-1]):
+        # Funding Kontrolü: Herkes Aşırı Short ise biz girmeyelim (Squeeze riski)
+        if funding_rate > -0.02:
+            sinyal = "SHORT 🔴"
+            sl = son_fiyat + (df['ATR'].iloc[-1] * 1.5)
+            tp = son_fiyat - ((sl - son_fiyat) * RISK_REWARD_RATIO)
 
-    return sinyal, setup_tipi, stop_loss, take_profit, destek, direnc
+    return sinyal, tip, sl, tp, balina_notu, funding_yorum
 
 # --- ANA MOTOR ---
 def calistir():
-    exchange = ccxt.binance() # Hacim verisi için
+    exchange = ccxt.binance()
     market_duygusu = piyasa_duygusunu_olc()
+    btc_degisim, btc_fiyat = btc_durumu(exchange)
     
-    print(f"Piyasa Modu: {market_duygusu}")
+    print(f"🌍 Piyasa Modu: {market_duygusu}")
+    print(f"👑 BTC Durumu: ${btc_fiyat} (%{btc_degisim:.2f})")
     
-    # Sadece Top Coinleri Tara
     hedef_coinler = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'BNB/USDT', 'AVAX/USDT', 'DOGE/USDT', 'APT/USDT']
-    
     raporlar = []
 
     for coin in hedef_coinler:
@@ -118,44 +156,39 @@ def calistir():
             try:
                 bars = exchange.fetch_ohlcv(coin, timeframe=tf, limit=100)
                 df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                df.name = tf # Dataframe'e isim etiketi yapıştır
+                df.name = tf
                 
-                sinyal, tip, sl, tp, sup, res = teknik_analiz(df)
+                sinyal, tip, sl, tp, balina, funding = teknik_analiz(exchange, coin, df, btc_degisim)
                 
                 if sinyal:
+                    # GLOBAL HABER FİLTRESİ (VETO)
+                    if sinyal == "LONG 🟢" and market_duygusu == "NEGATIF": continue
+                    if sinyal == "SHORT 🔴" and market_duygusu == "POZITIF": continue
+
                     fiyat = df['close'].iloc[-1]
-                    
-                    # --- HABER FİLTRESİ (VETO SİSTEMİ) ---
-                    # Eğer Piyasa Çok Kötü (NEGATIF) ama Teknik LONG diyorsa -> İŞLEMİ İPTAL ET
-                    if sinyal == "LONG 🟢" and market_duygusu == "NEGATIF":
-                        print(f"🚫 {coin} LONG sinyali haberler kötü olduğu için iptal edildi.")
-                        continue
-                    # Eğer Piyasa Çok İyi (POZITIF) ama Teknik SHORT diyorsa -> İŞLEMİ İPTAL ET
-                    if sinyal == "SHORT 🔴" and market_duygusu == "POZITIF":
-                        print(f"🚫 {coin} SHORT sinyali haberler iyi olduğu için iptal edildi.")
-                        continue
-                        
-                    # Mesaj Hazırla
                     mesaj = f"⚡ **NEUROTRADE {sinyal}** ({tip})\n\n"
                     mesaj += f"💎 **Coin:** #{coin.split('/')[0]}\n"
                     mesaj += f"💵 **Giriş:** ${fiyat:.4f}\n"
-                    mesaj += f"🛑 **Stop Loss:** ${sl:.4f}\n"
-                    mesaj += f"🎯 **Take Profit:** ${tp:.4f} (RR 1:2)\n\n"
-                    mesaj += f"📊 **Teknik:** FVG/Destek-Direnç Onaylı\n"
-                    mesaj += f"📰 **Piyasa Modu:** {market_duygusu} (Filtreden Geçti ✅)"
                     
+                    if balina: mesaj += f"{balina} 🚨\n"
+                    
+                    mesaj += f"🛑 **Stop:** ${sl:.4f}\n"
+                    mesaj += f"🎯 **Hedef:** ${tp:.4f}\n\n"
+                    mesaj += f"📊 **Analiz:**\n"
+                    mesaj += f"• 📰 Haber Modu: {market_duygusu}\n"
+                    mesaj += f"• 😈 Funding: {funding}\n"
+                    mesaj += f"• 👑 BTC Filtresi: {'Güvenli ✅' if btc_degisim > -3 else 'Riskli ⚠️'}"
+
                     raporlar.append(mesaj)
-                    
                 time.sleep(0.5)
             except Exception as e:
-                print(f"Hata: {e}")
+                print(f"Hata ({coin}): {e}")
                 continue
 
     if raporlar:
-        full_rapor = "\n----------------------\n".join(raporlar)
-        telegram_gonder(full_rapor)
+        telegram_gonder("\n----------------------\n".join(raporlar))
     else:
-        print("Uygun setup bulunamadı.")
+        print("Uygun Mega-Setup bulunamadı.")
 
 if __name__ == "__main__":
     calistir()
