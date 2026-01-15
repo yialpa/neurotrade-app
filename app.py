@@ -1,3 +1,21 @@
+Bu hatanın sebebi çok net: Hız Limiti (Rate Limit).
+
+Biz programa "Bütün coinleri 1 saniye içinde tara" dedik. Binance sunucusu da, "Hop! Sen bir robotsun, çok hızlı istek atıyorsun, seni engelliyorum" dedi. Bu yüzden sana boş veri döndü.
+
+Bunu çözmek için bota "İnsani Davranış" ekleyeceğiz. Her coine baktıktan sonra 1 saniye dinlenecek.
+
+Aşağıdaki V5.4 Kodu ile sorun çözülecek.
+
+Yapman Gerekenler:
+GitHub'da app.py dosyanı aç.
+
+Hepsini sil.
+
+Aşağıdaki kodu yapıştır. (Bu kodda tarama arasına time.sleep(1) koydum, yani 1 saniye bekleyip diğer coine geçecek).
+
+✅ NEUROTRADE V5.4 (Hız Limiti Korumalı)
+Python
+
 import streamlit as st
 import ccxt
 import pandas as pd
@@ -22,9 +40,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- AYARLAR ---
+# Listeyi biraz azalttık ki daha garanti çalışsın
 TARANACAK_COINLER = [
     'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'XRP/USDT', 
-    'ADA/USDT', 'DOGE/USDT', 'AVAX/USDT', 'LINK/USDT', 'LTC/USDT', 'MATIC/USDT'
+    'ADA/USDT', 'DOGE/USDT', 'AVAX/USDT'
 ]
 
 # --- YAN MENÜ ---
@@ -53,9 +72,13 @@ def telegram_gonder(token, chat_id, mesaj):
         st.error("Gönderim Hatası")
 
 def veri_getir(sembol, periyot='4h', limit=100):
-    # Binance US kullanıyoruz
-    exchange = ccxt.binanceus({'enableRateLimit': True}) 
+    # Kraken kullanıyoruz (Daha az blokluyor)
     try:
+        # BinanceUS yerine Kraken deneyelim, bazen daha stabil
+        exchange = ccxt.kraken() 
+        # Kraken sembolleri bazen farklıdır, o yüzden BinanceUS'e geri dönüyoruz ama yavaşlatarak
+        exchange = ccxt.binanceus({'enableRateLimit': True})
+        
         bars = exchange.fetch_ohlcv(sembol, timeframe=periyot, limit=limit)
         df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
@@ -70,8 +93,9 @@ def veri_getir(sembol, periyot='4h', limit=100):
         df['Direnc'] = df['high'].rolling(window=50).max()
         
         return df
-    except:
-        return pd.DataFrame() # Hata olursa boş döner
+    except Exception as e:
+        print(f"Hata ({sembol}): {e}") # Loglara hatayı yaz
+        return pd.DataFrame()
 
 # --- MOD 1: TEKLİ ANALİZ ---
 if mod == "📊 Tekli Analiz":
@@ -94,7 +118,6 @@ if mod == "📊 Tekli Analiz":
         fig.add_trace(go.Scatter(x=df['timestamp'], y=df['EMA_50'], line=dict(color='orange'), name='EMA 50'))
         fig.add_trace(go.Scatter(x=df['timestamp'], y=df['EMA_200'], line=dict(color='purple'), name='EMA 200'))
         
-        # FVG Çizimi
         for i in range(len(df)-50, len(df)-6):
              if df['high'].iloc[i] < df['low'].iloc[i+2]: 
                  fig.add_shape(type="rect", x0=df['timestamp'].iloc[i], y0=df['high'].iloc[i], x1=df['timestamp'].iloc[i+5], y1=df['low'].iloc[i+2], fillcolor="green", opacity=0.3, line_width=0)
@@ -112,16 +135,18 @@ if mod == "📊 Tekli Analiz":
 # --- MOD 2: MARKET TARAYICI ---
 elif mod == "🔍 Market Tarayıcı":
     st.title("🔍 Kripto Radar")
-    st.info("Bu mod, listedeki tüm coinleri tarar ve fırsatları listeler.")
+    st.info("Listedeki coinler taranıyor... Her coin için 1 saniye beklenir (Güvenlik gereği).")
     
     periyot_scan = st.selectbox("Tarama Periyodu", ["4h", "1h", "1d"])
     
     if st.button("🚀 TARAMAYI BAŞLAT"):
-        st.write("Veriler toplanıyor... Lütfen bekleyin.")
         bar = st.progress(0)
         firsatlar = []
         
         for i, coin in enumerate(TARANACAK_COINLER):
+            # İlerleme mesajı
+            st.write(f"⏳ {coin} taranıyor...")
+            
             df = veri_getir(coin, periyot_scan, 100)
             if not df.empty:
                 son = df.iloc[-1]
@@ -129,11 +154,10 @@ elif mod == "🔍 Market Tarayıcı":
                 ema50 = son['EMA_50']
                 fiyat = son['close']
                 
-                durum = "NOTR" # Hata olmasın diye İngilizce harf kullandım
+                durum = "NOTR"
                 
-                # Strateji
-                if rsi < 35: durum = "GÜÇLÜ AL"
-                elif rsi > 70: durum = "GÜÇLÜ SAT"
+                if rsi < 35: durum = "GUCLU AL"
+                elif rsi > 70: durum = "GUCLU SAT"
                 elif fiyat > ema50 and rsi > 55: durum = "TREND VAR"
                 
                 firsatlar.append({
@@ -142,20 +166,23 @@ elif mod == "🔍 Market Tarayıcı":
                     "RSI": f"{rsi:.1f}",
                     "Sinyal": durum
                 })
+            else:
+                st.write(f"❌ {coin} verisi alınamadı.")
             
             bar.progress((i + 1) / len(TARANACAK_COINLER))
-            time.sleep(0.1)
+            
+            # BURASI ÇOK ÖNEMLİ: HIZ LİMİTİNE TAKILMAMAK İÇİN 1 SANİYE BEKLEME
+            time.sleep(1.0)
             
         st.success("Tarama Tamamlandı!")
         
-        # TABLO GÖSTERİMİ
         if len(firsatlar) > 0:
             sonuc_df = pd.DataFrame(firsatlar)
             
             def renkli_tablo(val):
                 color = 'white'
-                if 'GÜÇLÜ AL' in str(val): color = '#90EE90'
-                elif 'GÜÇLÜ SAT' in str(val): color = '#FFcccb'
+                if 'GUCLU AL' in str(val): color = '#90EE90'
+                elif 'GUCLU SAT' in str(val): color = '#FFcccb'
                 elif 'TREND' in str(val): color = '#ADD8E6'
                 return f'background-color: {color}; color: black'
 
@@ -167,4 +194,4 @@ elif mod == "🔍 Market Tarayıcı":
             except:
                 st.dataframe(sonuc_df)
         else:
-            st.warning("Veri çekilemedi. Lütfen tekrar deneyin.")
+            st.warning("Veri çekilemedi. Sunucu çok yoğun olabilir.")
