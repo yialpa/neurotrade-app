@@ -129,4 +129,42 @@ elif mod == "🔍 Market Tarayıcı":
                 ema50 = son['EMA_50']
                 fiyat = son['close']
                 
-                durum = "N
+                durum = "NOTR" # Hata olmasın diye İngilizce harf kullandım
+                
+                # Strateji
+                if rsi < 35: durum = "GÜÇLÜ AL"
+                elif rsi > 70: durum = "GÜÇLÜ SAT"
+                elif fiyat > ema50 and rsi > 55: durum = "TREND VAR"
+                
+                firsatlar.append({
+                    "Coin": coin,
+                    "Fiyat": f"${fiyat:.4f}",
+                    "RSI": f"{rsi:.1f}",
+                    "Sinyal": durum
+                })
+            
+            bar.progress((i + 1) / len(TARANACAK_COINLER))
+            time.sleep(0.1)
+            
+        st.success("Tarama Tamamlandı!")
+        
+        # TABLO GÖSTERİMİ
+        if len(firsatlar) > 0:
+            sonuc_df = pd.DataFrame(firsatlar)
+            
+            def renkli_tablo(val):
+                color = 'white'
+                if 'GÜÇLÜ AL' in str(val): color = '#90EE90'
+                elif 'GÜÇLÜ SAT' in str(val): color = '#FFcccb'
+                elif 'TREND' in str(val): color = '#ADD8E6'
+                return f'background-color: {color}; color: black'
+
+            try:
+                try:
+                    st.dataframe(sonuc_df.style.map(renkli_tablo, subset=['Sinyal']), use_container_width=True)
+                except:
+                    st.dataframe(sonuc_df.style.applymap(renkli_tablo, subset=['Sinyal']), use_container_width=True)
+            except:
+                st.dataframe(sonuc_df)
+        else:
+            st.warning("Veri çekilemedi. Lütfen tekrar deneyin.")
