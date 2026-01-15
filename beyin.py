@@ -1,21 +1,3 @@
-Kaptan, hata raporuna baktım. Sorun çok basit bir "kesme yapıştırma kazası". ✂️💥
-
-satırda kodun bir kısmı silinmiş veya yarım kalmış. Hata veren satır şu şekilde görünüyor: elif (dist_to_res < 0.02 or df[' (Tırnak açılmış ama kapanmamış, kod yarım).
-
-Senin için beyin.py dosyasını tamamen onardım. Ayrıca az önce verdiğin Token ve Chat ID bilgilerini de kodun içine yerleştirdim.
-
-Yapman gereken tek şey:
-
-beyin.py dosyasını aç.
-
-Hepsini sil.
-
-Aşağıdaki kodu (hiçbir şeye dokunmadan) yapıştır.
-
-Commit changes de.
-
-Python
-
 import ccxt
 import pandas as pd
 import requests
