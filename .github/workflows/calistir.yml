@@ -10,28 +10,34 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Depoyu Çek
+      # 1. Kendi kodlarımızı çekiyoruz
+      - name: Ana Depoyu Cek
         uses: actions/checkout@v3
 
-      - name: Python Kur (Stabil Surum)
+      # 2. Pandas-TA kütüphanesini 'Yan Kapıdan' güvenli çekiyoruz
+      - name: Pandas-TA Kutuphanesini Indir
+        uses: actions/checkout@v3
+        with:
+          repository: twopirllc/pandas-ta
+          path: pandas-ta-lib
+
+      # 3. Python Kuruyoruz
+      - name: Python Kur
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      - name: Kutuphaneleri ve Botu Kur
+      # 4. Kurulumları Yapıyoruz
+      - name: Kutuphaneleri Kur
         run: |
           pip install --upgrade pip
-          # Önce Numpy 1.x kuruyoruz (2.0 sürümü eski kütüphaneleri bozuyor)
+          # Numpy uyumluluğu için
           pip install "numpy<2"
-          
-          # Temel kütüphaneler
+          # Temel araçlar
           pip install ccxt requests pandas
-          
-          # Pandas-TA'yı manuel klonlayıp kuruyoruz (En garantili yöntem)
-          git clone https://github.com/twopirllc/pandas-ta.git
-          cd pandas-ta
-          pip install .
-          cd ..
-          
+          # İndirdiğimiz klasörden Pandas-TA'yı kuruyoruz
+          pip install ./pandas-ta-lib
+
+      # 5. Botu Başlatıyoruz
       - name: Botu Calistir
         run: python beyin.py
