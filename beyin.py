@@ -5,6 +5,9 @@ import time
 import feedparser
 from textblob import TextBlob
 import numpy as np
+import json
+import os
+from datetime import datetime, timedelta
 
 # --- KİŞİSEL AYARLAR ---
 TELEGRAM_TOKEN = "8537277587:AAFxzrDMS0TEun8m7aQmck480iKD2HohtQc" 
@@ -13,6 +16,10 @@ CHAT_ID = "-1003516806415"
 # --- STRATEJİ AYARLARI ---
 TARAMA_PERIYOTLARI = ['4h', '1h'] 
 RISK_REWARD_RATIO = 2.0 
+HAFIZA_SURESI_SAAT = 4  # Aynı sinyali 4 saat boyunca tekrar atmaz
+
+# Dosya Adı
+HAFIZA_DOSYASI = 'hafiza.json'
 
 def telegram_gonder(mesaj):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -21,6 +28,43 @@ def telegram_gonder(mesaj):
         requests.post(url, data=payload)
     except:
         pass
+
+# --- HAFIZA YÖNETİMİ ---
+def hafiza_yukle():
+    if os.path.exists(HAFIZA_DOSYASI):
+        try:
+            with open(HAFIZA_DOSYASI, 'r') as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def hafiza_kaydet(hafiza):
+    try:
+        with open(HAFIZA_DOSYASI, 'w') as f:
+            json.dump(hafiza, f)
+    except:
+        pass
+
+def spam_kontrol(hafiza, coin, sinyal, timeframe):
+    """
+    Eğer bu sinyal yakın zamanda atıldıysa True döner (Spam var).
+    """
+    key = f"{coin}_{timeframe}"
+    if key in hafiza:
+        son_veri = hafiza[key]
+        last_signal = son_veri.get('sinyal')
+        last_time_str = son_veri.get('zaman')
+        
+        # Zaman farkını hesapla
+        last_time = datetime.strptime(last_time_str, "%Y-%m-%d %H:%M:%S")
+        gecen_sure = datetime.now() - last_time
+        
+        # 1. Kural: Aynı Sinyal (LONG/LONG) ve Süre Dolmadıysa -> SPAMDIR
+        if last_signal == sinyal and gecen_sure < timedelta(hours=HAFIZA_SURESI_SAAT):
+            return True
+            
+    return False
 
 # --- 1. MODÜL: BTC PATRON KONTROLÜ ---
 def btc_durumu(exchange):
@@ -51,7 +95,7 @@ def piyasa_duygusunu_olc():
     except:
         return "NOTR"
 
-# --- YARDIMCI: ADX HESAPLAMA ---
+# --- YARDIMCI: ADX ---
 def calculate_adx(df, period=14):
     try:
         df['up'] = df['high'] - df['high'].shift(1)
@@ -85,12 +129,7 @@ def teknik_analiz(exchange, coin, df, btc_degisim):
     balina_notu = "🐋 **BALİNA ALARMI**" if son_hacim > (hacim_ort * 3.0) else ""
     adx_degeri = calculate_adx(df)
     
-    if adx_degeri < 20:
-        # Ölü piyasa ise boş dön
-        return None, None, 0, 0, None, None
-
-    funding_rate = 0
-    funding_yorum = "Nötr"
+    if adx_degeri < 20: return None, None, 0, 0, None, None
 
     # ICT
     destek = df['low'].rolling(window=50).min().iloc[-1]
@@ -101,31 +140,31 @@ def teknik_analiz(exchange, coin, df, btc_degisim):
     fvg_bull = (df['high'].shift(2) < df['low']) & (df['close'].shift(1) > df['open'].shift(1))
     fvg_bear = (df['low'].shift(2) > df['high']) & (df['close'].shift(1) < df['open'].shift(1))
 
-    # --- DEĞİŞKENLERİ BAŞTAN TANIMLIYORUZ (HATA BURADAYDI) ---
     sinyal = None
     tip = "Swing" if "4h" in str(df.name) else "Scalp"
     sl = 0.0
     tp = 0.0
 
-    # LONG SENARYOSU
     if (dist_to_supp < 0.02 or fvg_bull.iloc[-1]) and btc_degisim > -3.0:
         sinyal = "LONG 🟢"
         sl = son_fiyat - (df['ATR'].iloc[-1] * 1.5)
         tp = son_fiyat + ((son_fiyat - sl) * RISK_REWARD_RATIO)
 
-    # SHORT SENARYOSU
     elif (dist_to_res < 0.02 or fvg_bear.iloc[-1]):
         sinyal = "SHORT 🔴"
         sl = son_fiyat + (df['ATR'].iloc[-1] * 1.5)
         tp = son_fiyat - ((sl - son_fiyat) * RISK_REWARD_RATIO)
 
-    return sinyal, tip, sl, tp, balina_notu, funding_yorum
+    return sinyal, tip, sl, tp, balina_notu, "Nötr"
 
 # --- ANA MOTOR ---
 def calistir():
     exchange = ccxt.binanceus() 
     market_duygusu = piyasa_duygusunu_olc()
     btc_degisim, btc_fiyat = btc_durumu(exchange)
+    
+    # Hafızayı Yükle
+    hafiza = hafiza_yukle()
     
     print(f"🌍 Piyasa Modu: {market_duygusu}")
     print(f"👑 BTC Durumu: ${btc_fiyat} (%{btc_degisim:.2f})")
@@ -143,6 +182,12 @@ def calistir():
                 sinyal, tip, sl, tp, balina, funding = teknik_analiz(exchange, coin, df, btc_degisim)
                 
                 if sinyal:
+                    # 1. SPAM KONTROLÜ (Hafızada var mı?)
+                    if spam_kontrol(hafiza, coin, sinyal, tip):
+                        print(f"🚫 SPAM ENGELLENDİ: {coin} {sinyal} ({tip}) - Yakın zamanda atıldı.")
+                        continue # Mesaj atma, sonraki coine geç
+
+                    # 2. HABER VETOSU
                     if sinyal == "LONG 🟢" and market_duygusu == "NEGATIF": continue
                     if sinyal == "SHORT 🔴" and market_duygusu == "POZITIF": continue
 
@@ -160,6 +205,13 @@ def calistir():
                     mesaj += f"• 👑 BTC Filtresi: {'Güvenli ✅' if btc_degisim > -3 else 'Riskli ⚠️'}"
 
                     raporlar.append(mesaj)
+                    
+                    # 3. HAFIZAYA KAYDET (Mesaj atılacaksa)
+                    hafiza[f"{coin}_{tip}"] = {
+                        "sinyal": sinyal,
+                        "zaman": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
+                    
                 time.sleep(0.5)
             except Exception as e:
                 print(f"Hata ({coin}): {e}")
@@ -167,8 +219,10 @@ def calistir():
 
     if raporlar:
         telegram_gonder("\n----------------------\n".join(raporlar))
+        # İşlem bitince hafızayı dosyaya yaz
+        hafiza_kaydet(hafiza)
     else:
-        print("Uygun Mega-Setup bulunamadı.")
+        print("Uygun setup yok veya hepsi spam filtresine takıldı.")
 
 if __name__ == "__main__":
     calistir()
