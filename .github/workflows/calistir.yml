@@ -2,27 +2,25 @@ name: 7/24 Bot Devriyesi
 
 on:
   schedule:
-    - cron: '0 * * * *'  # Her saat başı çalışır
-  workflow_dispatch:      # Elle tetiklemek için
+    - cron: '0 * * * *'  # Bu satır botu HER SAAT BAŞI çalıştırır (09:00, 10:00 vs.)
+  workflow_dispatch:      # Bu satır MANUEL butonun kalmasını sağlar
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Depoyu Çek
-        uses: actions/checkout@v3
+    - name: Depoyu Çek (Checkout)
+      uses: actions/checkout@v3
 
-      - name: Python Kur
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
+    - name: Python Kurulumu
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
 
-      - name: Kutuphaneleri Kur
-        run: |
-          pip install --upgrade pip
-          # Haberler ve analiz için gerekli ek kütüphaneler eklendi
-          pip install ccxt requests pandas feedparser textblob
+    - name: Kütüphaneleri Yükle
+      run: |
+        pip install ccxt pandas requests feedparser textblob numpy
 
-      - name: Botu Calistir
-        run: python beyin.py
+    - name: Botu Calistir
+      run: python beyin.py
