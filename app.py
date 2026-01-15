@@ -62,7 +62,7 @@ def haberleri_analiz_et():
 
 # --- 2. VERİ VE TEKNİK ANALİZ MODÜLÜ ---
 def veri_getir(sembol, periyot):
-    exchange = ccxt.binance({'enableRateLimit': True})
+    exchange = ccxt.binanceus({'enableRateLimit': True})
     try:
         bars = exchange.fetch_ohlcv(sembol, timeframe=periyot, limit=200)
         df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -154,4 +154,5 @@ if not df.empty:
             st.markdown("---")
 
 else:
+
     st.warning("Veri yükleniyor...")
