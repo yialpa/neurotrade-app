@@ -24,10 +24,8 @@ def telegram_gonder(mesaj):
 
 # --- 1. MODÜL: BTC PATRON KONTROLÜ ---
 def btc_durumu(exchange):
-    """
-    BTC %3'ten fazla düştüyse piyasa 'KIRMIZI ALARM'dır.
-    """
     try:
+        # Binance US'de bazen ticker sembolleri farklı olabilir, try ile deniyoruz
         ticker = exchange.fetch_ticker('BTC/USDT')
         degisim = ticker['percentage']
         fiyat = ticker['last']
@@ -54,7 +52,7 @@ def piyasa_duygusunu_olc():
     except:
         return "NOTR"
 
-# --- YARDIMCI: ADX HESAPLAMA (Trend Gücü) ---
+# --- YARDIMCI: ADX HESAPLAMA ---
 def calculate_adx(df, period=14):
     try:
         df['up'] = df['high'] - df['high'].shift(1)
@@ -75,34 +73,29 @@ def calculate_adx(df, period=14):
         df['adx'] = df['dx'].rolling(window=period).mean()
         return df['adx'].iloc[-1]
     except:
-        return 25 # Hata olursa varsayılan değer
+        return 25 
 
 # --- 3. MODÜL: MEGA TEKNİK ANALİZ ---
 def teknik_analiz(exchange, coin, df, btc_degisim):
     df['ATR'] = df['high'] - df['low']
     son_fiyat = df['close'].iloc[-1]
     
-    # 1. BALİNA KONTROLÜ 🐋
+    # 1. BALİNA KONTROLÜ
     hacim_ort = df['volume'].rolling(window=20).mean().iloc[-1]
     son_hacim = df['volume'].iloc[-1]
     balina_notu = "🐋 **BALİNA ALARMI**" if son_hacim > (hacim_ort * 3.0) else ""
 
-    # 2. ADX TREND KONTROLÜ 📉
+    # 2. ADX TREND KONTROLÜ
     adx_degeri = calculate_adx(df)
-    trend_notu = "Güçlü Trend" if adx_degeri > 25 else "Zayıf Trend"
     
-    # Eğer Trend çok zayıfsa (ADX < 20) işlem açma (Ölü Piyasa)
+    # Ölü Piyasa Filtresi (ADX < 20)
     if adx_degeri < 20:
         return None, None, 0, 0, None, None
 
-    # 3. FUNDING RATE (TERS KÖŞE) 😈
-    try:
-        funding_info = exchange.fetch_funding_rate(coin)
-        funding_rate = funding_info['fundingRate'] * 100 # Yüzdeye çevir
-        funding_yorum = "Aşırı Long" if funding_rate > 0.01 else ("Aşırı Short" if funding_rate < -0.01 else "Nötr")
-    except:
-        funding_rate = 0
-        funding_yorum = "Nötr"
+    # 3. FUNDING RATE (Opsiyonel - Binance US'de funding verisi bazen eksik olabilir)
+    # Hata almamak için burayı basitleştirdik
+    funding_rate = 0
+    funding_yorum = "Nötr"
 
     # 4. ICT & PRICE ACTION
     destek = df['low'].rolling(window=50).min().iloc[-1]
@@ -110,45 +103,38 @@ def teknik_analiz(exchange, coin, df, btc_degisim):
     dist_to_supp = (son_fiyat - destek) / son_fiyat
     dist_to_res = (direnc - son_fiyat) / son_fiyat
     
-    # FVG Tespiti
     fvg_bull = (df['high'].shift(2) < df['low']) & (df['close'].shift(1) > df['open'].shift(1))
     fvg_bear = (df['low'].shift(2) > df['high']) & (df['close'].shift(1) < df['open'].shift(1))
 
     sinyal = None
     tip = "Swing" if "4h" in str(df.name) else "Scalp"
 
-    # --- KARAR MEKANİZMASI ---
-
-    # LONG SENARYOSU
-    # Kural: BTC Çakılmıyor olmalı (> -3%) VE (Destek Yakın VEYA FVG Var)
+    # LONG SENARYOSU (BTC Filtresi Aktif)
     if (dist_to_supp < 0.02 or fvg_bull.iloc[-1]) and btc_degisim > -3.0:
-        # Funding Kontrolü: Herkes Aşırı Long ise biz girmeyelim (Tuzak olabilir)
-        if funding_rate < 0.02: 
-            sinyal = "LONG 🟢"
-            sl = son_fiyat - (df['ATR'].iloc[-1] * 1.5)
-            tp = son_fiyat + ((son_fiyat - sl) * RISK_REWARD_RATIO)
+        sinyal = "LONG 🟢"
+        sl = son_fiyat - (df['ATR'].iloc[-1] * 1.5)
+        tp = son_fiyat + ((son_fiyat - sl) * RISK_REWARD_RATIO)
 
     # SHORT SENARYOSU
-    # Kural: (Direnç Yakın VEYA FVG Var)
     elif (dist_to_res < 0.02 or fvg_bear.iloc[-1]):
-        # Funding Kontrolü: Herkes Aşırı Short ise biz girmeyelim (Squeeze riski)
-        if funding_rate > -0.02:
-            sinyal = "SHORT 🔴"
-            sl = son_fiyat + (df['ATR'].iloc[-1] * 1.5)
-            tp = son_fiyat - ((sl - son_fiyat) * RISK_REWARD_RATIO)
+        sinyal = "SHORT 🔴"
+        sl = son_fiyat + (df['ATR'].iloc[-1] * 1.5)
+        tp = son_fiyat - ((sl - son_fiyat) * RISK_REWARD_RATIO)
 
     return sinyal, tip, sl, tp, balina_notu, funding_yorum
 
 # --- ANA MOTOR ---
 def calistir():
-    exchange = ccxt.binance()
+    # KRİTİK DEĞİŞİKLİK: ccxt.binanceus() kullanıyoruz (GitHub ABD sunucuları için)
+    exchange = ccxt.binanceus() 
     market_duygusu = piyasa_duygusunu_olc()
     btc_degisim, btc_fiyat = btc_durumu(exchange)
     
     print(f"🌍 Piyasa Modu: {market_duygusu}")
     print(f"👑 BTC Durumu: ${btc_fiyat} (%{btc_degisim:.2f})")
     
-    hedef_coinler = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'BNB/USDT', 'AVAX/USDT', 'DOGE/USDT', 'APT/USDT']
+    # Binance US'de olan coinler
+    hedef_coinler = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'AVAX/USDT', 'DOGE/USDT', 'LTC/USDT', 'LINK/USDT']
     raporlar = []
 
     for coin in hedef_coinler:
@@ -161,7 +147,6 @@ def calistir():
                 sinyal, tip, sl, tp, balina, funding = teknik_analiz(exchange, coin, df, btc_degisim)
                 
                 if sinyal:
-                    # GLOBAL HABER FİLTRESİ (VETO)
                     if sinyal == "LONG 🟢" and market_duygusu == "NEGATIF": continue
                     if sinyal == "SHORT 🔴" and market_duygusu == "POZITIF": continue
 
@@ -176,7 +161,6 @@ def calistir():
                     mesaj += f"🎯 **Hedef:** ${tp:.4f}\n\n"
                     mesaj += f"📊 **Analiz:**\n"
                     mesaj += f"• 📰 Haber Modu: {market_duygusu}\n"
-                    mesaj += f"• 😈 Funding: {funding}\n"
                     mesaj += f"• 👑 BTC Filtresi: {'Güvenli ✅' if btc_degisim > -3 else 'Riskli ⚠️'}"
 
                     raporlar.append(mesaj)
