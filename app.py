@@ -22,7 +22,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- AYARLAR ---
-# Taranacak Coin Listesi (İstediğini ekleyip çıkarabilirsin)
 TARANACAK_COINLER = [
     'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'XRP/USDT', 
     'ADA/USDT', 'DOGE/USDT', 'AVAX/USDT', 'LINK/USDT', 'LTC/USDT', 'MATIC/USDT'
@@ -39,7 +38,7 @@ st.sidebar.subheader("📡 Telegram Ayarları")
 tg_token = st.sidebar.text_input("Bot Token", type="password")
 tg_chat_id = st.sidebar.text_input("Chat ID")
 
-# --- ORTAK FONKSİYONLAR ---
+# --- FONKSİYONLAR ---
 
 def telegram_gonder(token, chat_id, mesaj):
     if not token or not chat_id:
@@ -54,7 +53,8 @@ def telegram_gonder(token, chat_id, mesaj):
         st.error("Gönderim Hatası")
 
 def veri_getir(sembol, periyot='4h', limit=100):
-    exchange = ccxt.binanceus({'enableRateLimit': True}) # US Sunucusu
+    # Binance US kullanıyoruz
+    exchange = ccxt.binanceus({'enableRateLimit': True}) 
     try:
         bars = exchange.fetch_ohlcv(sembol, timeframe=periyot, limit=limit)
         df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -71,9 +71,9 @@ def veri_getir(sembol, periyot='4h', limit=100):
         
         return df
     except:
-        return pd.DataFrame()
+        return pd.DataFrame() # Hata olursa boş döner
 
-# --- MOD 1: TEKLİ ANALİZ (Eski Ekranımız) ---
+# --- MOD 1: TEKLİ ANALİZ ---
 if mod == "📊 Tekli Analiz":
     secilen_coin = st.sidebar.selectbox("Varlık Seçin", TARANACAK_COINLER)
     zaman_dilimi = st.sidebar.selectbox("Zaman Dilimi", ('4h', '1h', '15m'))
@@ -85,40 +85,39 @@ if mod == "📊 Tekli Analiz":
     if not df.empty:
         son = df.iloc[-1]
         
-        # Metrikler
         c1, c2, c3 = st.columns(3)
         c1.metric("Fiyat", f"${son['close']:.2f}")
         c2.metric("RSI", f"{son['RSI']:.2f}", "Aşırı Alım" if son['RSI']>70 else "Aşırı Satım" if son['RSI']<30 else "Nötr")
         
-        # Grafik
         fig = go.Figure()
         fig.add_trace(go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Fiyat'))
         fig.add_trace(go.Scatter(x=df['timestamp'], y=df['EMA_50'], line=dict(color='orange'), name='EMA 50'))
         fig.add_trace(go.Scatter(x=df['timestamp'], y=df['EMA_200'], line=dict(color='purple'), name='EMA 200'))
         
-        # FVG Çizimi
-        for i in range(len(df)-50, len(df)-5):
-             if df['high'].iloc[i] < df['low'].iloc[i+2]: # Bullish
+        # FVG Çizimi (Index hatası düzeltildi)
+        for i in range(len(df)-50, len(df)-6):
+             if df['high'].iloc[i] < df['low'].iloc[i+2]: 
                  fig.add_shape(type="rect", x0=df['timestamp'].iloc[i], y0=df['high'].iloc[i], x1=df['timestamp'].iloc[i+5], y1=df['low'].iloc[i+2], fillcolor="green", opacity=0.3, line_width=0)
+             if df['low'].iloc[i] > df['high'].iloc[i+2]:
+                 fig.add_shape(type="rect", x0=df['timestamp'].iloc[i], y0=df['low'].iloc[i], x1=df['timestamp'].iloc[i+5], y1=df['high'].iloc[i+2], fillcolor="red", opacity=0.3, line_width=0)
         
         fig.update_layout(height=600, template="plotly_dark", title="Teknik Görünüm")
         st.plotly_chart(fig, use_container_width=True)
         
-        # Sinyal Butonu
         st.subheader("📢 Sinyal Paylaş")
-        msg = st.text_area("Mesaj", value=f"🚀 **{secilen_coin}** için izleme listesi!\nFiyat: {son['close']}$ \nRSI: {son['RSI']:.2f}")
+        msg = st.text_area("Mesaj", value=f"🚀 **{secilen_coin}** Analizi\nFiyat: {son['close']}$ \nRSI: {son['RSI']:.2f}")
         if st.button("Gönder"):
             telegram_gonder(tg_token, tg_chat_id, msg)
 
-# --- MOD 2: MARKET TARAYICI (YENİ ÖZELLİK) ---
+# --- MOD 2: MARKET TARAYICI ---
 elif mod == "🔍 Market Tarayıcı":
-    st.title("🔍 Kripto Radar (Market Scanner)")
-    st.info("Bu mod, listedeki tüm coinleri tarar ve 'AL' fırsatı verenleri listeler.")
+    st.title("🔍 Kripto Radar")
+    st.info("Bu mod, listedeki tüm coinleri tarar ve fırsatları listeler.")
     
     periyot_scan = st.selectbox("Tarama Periyodu", ["4h", "1h", "1d"])
     
     if st.button("🚀 TARAMAYI BAŞLAT"):
-        st.write("Tarama yapılıyor, lütfen bekleyin...")
+        st.write("Veriler toplanıyor... (Bu işlem 10-15 saniye sürebilir)")
         bar = st.progress(0)
         firsatlar = []
         
@@ -131,46 +130,39 @@ elif mod == "🔍 Market Tarayıcı":
                 fiyat = son['close']
                 
                 durum = "NÖTR"
-                sebep = "-"
+                # Strateji
+                if rsi < 35: durum = "🟢 GÜÇLÜ AL"
+                elif rsi > 70: durum = "🔴 GÜÇLÜ SAT"
+                elif fiyat > ema50 and rsi > 55: durum = "📈 TREND VAR"
                 
-                # Basit Strateji: RSI < 35 VEYA Fiyat EMA50'ye çok yakınsa
-                if rsi < 35:
-                    durum = "🟢 GÜÇLÜ AL (RSI Dip)"
-                    sebep = f"RSI Aşırı Satım ({rsi:.1f})"
-                elif rsi > 70:
-                    durum = "🔴 GÜÇLÜ SAT (RSI Tepe)"
-                    sebep = f"RSI Aşırı Alım ({rsi:.1f})"
-                elif fiyat > ema50 and rsi > 50:
-                    durum = "📈 YÜKSELİŞ TRENDİ"
-                    sebep = "Fiyat EMA50 Üstünde"
-                
-                # Listeye Ekle
                 firsatlar.append({
                     "Coin": coin,
                     "Fiyat": f"${fiyat:.4f}",
                     "RSI": f"{rsi:.1f}",
-                    "Sinyal": durum,
-                    "Detay": sebep
+                    "Sinyal": durum
                 })
             
-            # İlerleme Çubuğunu Güncelle
             bar.progress((i + 1) / len(TARANACAK_COINLER))
-            time.sleep(0.1) # API'yi boğmamak için minik bekleme
+            time.sleep(0.1)
             
-        st.success("Tarama Tamamlandı! İşte Sonuçlar:")
+        st.success("Tarama Tamamlandı!")
         
-        # Sonuçları Tablo Olarak Göster
-        sonuc_df = pd.DataFrame(firsatlar)
-        
-        # Sadece "AL" veya "SAT" olanları renkli gösterelim (Streamlit hilesi)
-        def renkli_tablo(val):
-            color = 'white'
-            if 'GÜÇLÜ AL' in str(val): color = '#90EE90' # Açık Yeşil
-            elif 'GÜÇLÜ SAT' in str(val): color = '#FFcccb' # Açık Kırmızı
-            return f'background-color: {color}; color: black'
+        # --- HATA DÜZELTME KISMI ---
+        # Eğer liste boşsa hata vermek yerine uyarı gösteriyoruz
+        if len(firsatlar) > 0:
+            sonuc_df = pd.DataFrame(firsatlar)
+            
+            def renkli_tablo(val):
+                color = 'white'
+                if 'GÜÇLÜ AL' in str(val): color = '#90EE90' # Yeşil
+                elif 'GÜÇLÜ SAT' in str(val): color = '#FFcccb' # Kırmızı
+                elif 'TREND' in str(val): color = '#ADD8E6' # Mavi
+                return f'background-color: {color}; color: black'
 
-        # Tabloyu ekrana bas
-        st.dataframe(sonuc_df.style.applymap(renkli_tablo, subset=['Sinyal']), use_container_width=True)
-        
-        st.markdown("---")
-        st.write("💡 *İpucu: Bu listedeki fırsatları detaylı incelemek için sol menüden 'Tekli Analiz' moduna geçip coini seçebilirsin.*")
+            # Tabloyu bas (try-except ile korumalı)
+            try:
+                st.dataframe(sonuc_df.style.map(renkli_tablo, subset=['Sinyal']), use_container_width=True)
+            except:
+                st.dataframe(sonuc_df) # Renklendirme hata verirse düz tablo bas
+        else:
+            st.warning("⚠️ Şu an veri
