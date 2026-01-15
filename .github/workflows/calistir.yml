@@ -16,13 +16,14 @@ jobs:
       - name: Python Kur (Guncel Surum)
         uses: actions/setup-python@v4
         with:
-          python-version: '3.12' 
+          python-version: '3.12'
 
       - name: Kutuphaneleri Yukle
         run: |
           pip install --upgrade pip
           pip install ccxt pandas requests
-          pip install git+https://github.com/twopirllc/pandas-ta.git@development
+          # Kütüphaneyi direkt ZIP olarak indiriyoruz (Şifre sormaz)
+          pip install https://github.com/twopirllc/pandas-ta/archive/refs/heads/development.zip
 
       - name: Botu Calistir
         run: python beyin.py
