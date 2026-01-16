@@ -1,6 +1,5 @@
 import ccxt
 import pandas as pd
-import pandas_ta as ta
 import requests
 import time
 import feedparser
@@ -12,7 +11,7 @@ import mplfinance as mpf
 from datetime import datetime, timedelta
 
 # ==========================================
-# 🦅 NEUROTRADE V8.0 - GÖRSEL ZEKA & MTF
+# 🦅 NEUROTRADE V8.1 - HAFİF GÖRSEL ZEKA (No-Lib)
 # ==========================================
 
 # --- KİŞİSEL AYARLAR ---
@@ -24,8 +23,8 @@ JSONBIN_API_KEY = "$2a$10$5cOoQOZABAJQlhbFtkjyk.pTqcw9gawnwvTfznf59FTmprp/cffV6"
 JSONBIN_BIN_ID = "696944b1d0ea881f406e6a0c"
 
 # --- STRATEJİ AYARLARI ---
-TARAMA_PERIYODU = '15m'       # İşlem periyodu
-ANA_TREND_PERIYODU = '4h'     # Trend filtresi (Büyük Abi)
+TARAMA_PERIYODU = '15m'       
+ANA_TREND_PERIYODU = '4h'     
 RISK_REWARD_RATIO = 2.0  
 HAFIZA_SURESI_SAAT = 4   
 CEZA_SURESI_SAAT = 6     
@@ -33,16 +32,14 @@ KARI_KITLE_YUZDE = 1.0
 TARANACAK_COIN_SAYISI = 40  
 
 def telegram_foto_gonder(mesaj, resim_buffer):
-    """Grafikli Mesaj Gönderir"""
+    """Grafikli Mesaj"""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
     files = {'photo': ('chart.png', resim_buffer, 'image/png')}
     data = {'chat_id': CHAT_ID, 'caption': mesaj, 'parse_mode': 'Markdown'}
     try:
         requests.post(url, files=files, data=data)
-    except Exception as e:
-        print(f"Fotoğraf gönderme hatası: {e}")
-        # Fotoğraf gitmezse normal mesaj dene
-        telegram_gonder(mesaj)
+    except:
+        telegram_gonder(mesaj) # Foto gitmezse yazı at
 
 def telegram_gonder(mesaj):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -72,37 +69,44 @@ def hafiza_kaydet(hafiza):
     except:
         pass
 
-# --- GRAFİK ÇİZİCİ (RESSAM MODÜLÜ) ---
+# --- TEKNİK HESAPLAMALAR (MANUEL - pandas_ta YOK) ---
+def calculate_rsi(series, period=14):
+    """RSI Hesaplar (Kütüphanesiz)"""
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+def calculate_atr(df, period=14):
+    """ATR Hesaplar (Kütüphanesiz)"""
+    high_low = df['high'] - df['low']
+    high_close = np.abs(df['high'] - df['close'].shift())
+    low_close = np.abs(df['low'] - df['close'].shift())
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = np.max(ranges, axis=1)
+    return true_range.rolling(window=period).mean()
+
+# --- GRAFİK ÇİZİCİ ---
 def grafik_olustur(df, coin, sinyal, giris, stop, hedef):
-    """Sinyal anındaki grafiği çizer ve belleğe kaydeder"""
     try:
-        # Son 50 mumu al
         plot_df = df.tail(50).copy()
         plot_df.index = pd.DatetimeIndex(plot_df['timestamp'])
         
-        # Çizgiler (Hlines)
         hlines = dict(hlines=[giris, stop, hedef], 
                       colors=['blue', 'red', 'green'], 
-                      linewidths=[1, 1, 1],
-                      linestyle='-')
+                      linewidths=[1, 1, 1], linestyle='-')
 
-        # Stil ayarları
         mc = mpf.make_marketcolors(up='green', down='red', edge='i', wick='i', volume='in', inherit=True)
         s = mpf.make_mpf_style(marketcolors=mc, gridstyle=':', y_on_right=True)
 
-        # Belleğe kaydetmek için buffer
         buf = io.BytesIO()
-        
-        # Başlık
         title = f"\nNEUROTRADE AI - {coin} ({sinyal})"
-
         mpf.plot(plot_df, type='candle', style=s, title=title,
                  hlines=hlines, volume=False, savefig=buf)
-        
         buf.seek(0)
         return buf
-    except Exception as e:
-        print(f"Grafik çizim hatası: {e}")
+    except:
         return None
 
 # --- KUCOIN HACİM AVCISI ---
@@ -111,52 +115,45 @@ def en_iyi_coinleri_getir(exchange, limit=40):
         tickers = exchange.fetch_tickers()
         usdt_pairs = {
             symbol: data for symbol, data in tickers.items() 
-            if symbol.endswith('/USDT') 
-            and '3S' not in symbol and '3L' not in symbol 
-            and 'UP' not in symbol and 'DOWN' not in symbol
+            if symbol.endswith('/USDT') and '3S' not in symbol and '3L' not in symbol 
         }
         sorted_pairs = sorted(usdt_pairs.items(), key=lambda x: x[1]['quoteVolume'] if x[1]['quoteVolume'] else 0, reverse=True)
-        top_coins = [pair[0] for pair in sorted_pairs[:limit]]
-        print(f"🔥 Hacim Avcısı: {len(top_coins)} coin seçildi.")
-        return top_coins
+        return [pair[0] for pair in sorted_pairs[:limit]]
     except:
         return ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT']
 
-# --- MTF (MULTI TIMEFRAME) ANALİZİ ---
+# --- MTF ANALİZİ (MANUEL EMA) ---
 def ana_trend_kontrol(exchange, coin):
-    """4 Saatlik grafiğe bakıp ana trendi söyler"""
     try:
         bars = exchange.fetch_ohlcv(coin, timeframe=ANA_TREND_PERIYODU, limit=50)
         df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
-        ema50 = ta.ema(df['close'], length=50).iloc[-1]
+        # Manuel EMA 50
+        ema50 = df['close'].ewm(span=50, adjust=False).mean().iloc[-1]
         fiyat = df['close'].iloc[-1]
         
-        if fiyat > ema50: return "YUKARI"
-        else: return "ASAGI"
+        return "YUKARI" if fiyat > ema50 else "ASAGI"
     except:
-        return "NOTR" # Veri alamazsa engelleme
+        return "NOTR"
 
-# --- GÜNLÜK RAPOR ---
+# --- RAPORLAMA ---
 def gunluk_rapor_kontrol(hafiza, market_duygusu, btc_fiyat):
     bugun = datetime.now().strftime("%Y-%m-%d")
     son_rapor = hafiza.get("son_rapor_tarihi", "")
     
     if son_rapor != bugun:
         mesaj = f"📅 **GÜNLÜK PATRON RAPORU**\n\n"
-        mesaj += f"✅ **Sistem:** V8.0 (Visual Brain)\n"
-        mesaj += f"📸 **Özellik:** Grafik Gönderimi Aktif\n"
-        mesaj += f"⏳ **Filtre:** MTF (4H Trend) Kontrolü\n"
-        mesaj += f"🌍 **Piyasa Modu:** {market_duygusu}\n"
-        mesaj += f"👑 **BTC Fiyatı:** ${btc_fiyat:.2f}\n\n"
-        mesaj += f"🦅 *Gözümle görmediğim işe girmem Kaptan.*"
-        
+        mesaj += f"✅ **Sistem:** V8.1 (Light Mode)\n"
+        mesaj += f"📸 **Görsel:** Grafik Aktif\n"
+        mesaj += f"⏳ **MTF:** 4H Trend Kontrolü\n"
+        mesaj += f"🌍 **Mod:** {market_duygusu}\n"
+        mesaj += f"👑 **BTC:** ${btc_fiyat:.2f}\n"
         telegram_gonder(mesaj)
         hafiza["son_rapor_tarihi"] = bugun
         return True 
     return False
 
-# --- KÂRI KİTLEME ---
+# --- KÂR TAKİBİ ---
 def pozisyon_takip(exchange, hafiza):
     degisiklik_var = False
     keys = list(hafiza.keys()) 
@@ -190,7 +187,7 @@ def pozisyon_takip(exchange, hafiza):
         except: continue
     return degisiklik_var
 
-# --- ANALİZ MODÜLLERİ ---
+# --- SPAM ENGEL ---
 def spam_kontrol(hafiza, coin, sinyal):
     key = f"{coin}_{sinyal}"
     if key in hafiza:
@@ -201,20 +198,18 @@ def spam_kontrol(hafiza, coin, sinyal):
             return True
     return False
 
+# --- ANA TEKNİK ANALİZ (MANUEL) ---
 def teknik_analiz(coin, df, ana_trend):
-    # ATR Hesapla
-    df['ATR'] = ta.atr(df['high'], df['low'], df['close'], length=14)
-    son_fiyat = df['close'].iloc[-1]
+    # Kütüphanesiz Hesaplamalar
+    df['ATR'] = calculate_atr(df)
+    df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
+    df['ema20'] = df['close'].ewm(span=20, adjust=False).mean()
+    df['rsi'] = calculate_rsi(df['close'])
     
-    # EMA Hesapla
-    df['ema50'] = ta.ema(df['close'], length=50)
-    df['ema20'] = ta.ema(df['close'], length=20)
-    df['rsi'] = ta.rsi(df['close'], length=14)
-    
-    # BOS Seviyeleri
     df['highest_20'] = df['high'].rolling(window=20).max().shift(1)
     df['lowest_20'] = df['low'].rolling(window=20).min().shift(1)
     
+    son_fiyat = df['close'].iloc[-1]
     sinyal = None
     sl = 0.0
     tp = 0.0
@@ -224,11 +219,8 @@ def teknik_analiz(coin, df, ana_trend):
     ema20_val = df['ema20'].iloc[-1]
     ema50_val = df['ema50'].iloc[-1]
 
-    # --- LONG STRATEJİSİ ---
-    # 1. Ana Trend (4H) YUKARI olmalı (MTF Kuralı)
-    # 2. 15m'de Trend Yukarı olmalı
+    # STRATEJİLER
     if ana_trend == "YUKARI" and ema20_val > ema50_val and 45 < current_rsi < 70:
-        # BOS veya Retest
         if son_fiyat > df['highest_20'].iloc[-1]:
             sinyal, setup_info = "LONG 🟢", "BOS (Yukarı Kırılım)"
         elif abs(son_fiyat - ema50_val) / son_fiyat < 0.01:
@@ -238,9 +230,6 @@ def teknik_analiz(coin, df, ana_trend):
             sl = son_fiyat - (df['ATR'].iloc[-1] * 1.5)
             tp = son_fiyat + ((son_fiyat - sl) * RISK_REWARD_RATIO)
 
-    # --- SHORT STRATEJİSİ ---
-    # 1. Ana Trend (4H) AŞAĞI olmalı (MTF Kuralı)
-    # 2. 15m'de Trend Aşağı olmalı
     elif ana_trend == "ASAGI" and ema20_val < ema50_val and 30 < current_rsi < 55:
         if son_fiyat < df['lowest_20'].iloc[-1]:
             sinyal, setup_info = "SHORT 🔴", "BOS (Aşağı Kırılım)"
@@ -256,9 +245,8 @@ def teknik_analiz(coin, df, ana_trend):
 # --- ANA MOTOR ---
 def calistir():
     exchange = ccxt.kucoin()
-    print("🦅 NEUROTRADE V8.0 (Visual Brain) Başlatılıyor...")
+    print("🦅 NEUROTRADE V8.1 (Light & Visual) Başlatılıyor...")
     
-    # Basit Duygu Analizi (RSS)
     try:
         feed = feedparser.parse("https://cointelegraph.com/rss")
         score = sum([TextBlob(e.title).sentiment.polarity for e in feed.entries[:5]])
@@ -279,38 +267,31 @@ def calistir():
     
     if gunluk_rapor_kontrol(hafiza, market_duygusu, btc_fiyat):
         hafiza_degisti = True
-
     if pozisyon_takip(exchange, hafiza):
         hafiza_degisti = True
 
-    print(f"🔭 Tarama Başlıyor ({len(hedef_coinler)} Coin)...")
+    print(f"🔭 Taranan Coin: {len(hedef_coinler)}")
 
     for coin in hedef_coinler:
         try:
-            # 1. ADIM: Büyük Resme Bak (4H Trend)
+            # 1. MTF Kontrolü
             ana_trend = ana_trend_kontrol(exchange, coin)
             
-            # 2. ADIM: Küçük Resme Bak (15m İşlem)
+            # 2. İşlem Grafiği
             bars = exchange.fetch_ohlcv(coin, timeframe=TARAMA_PERIYODU, limit=100)
             df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms') # Grafik için tarih formatı
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             
             sinyal, sl, tp, setup = teknik_analiz(coin, df, ana_trend)
             
             if sinyal:
-                if spam_kontrol(hafiza, coin, sinyal):
-                    print(f"🚫 SPAM: {coin}")
-                    continue 
-                
-                # Haber Filtresi
-                if (sinyal == "LONG 🟢" and market_duygusu == "NEGATIF") or (sinyal == "SHORT 🔴" and market_duygusu == "POZITIF"):
-                    continue
+                if spam_kontrol(hafiza, coin, sinyal): continue 
+                if (sinyal == "LONG 🟢" and market_duygusu == "NEGATIF") or (sinyal == "SHORT 🔴" and market_duygusu == "POZITIF"): continue
 
                 fiyat = df['close'].iloc[-1]
                 sl_yuzde = abs((fiyat - sl) / fiyat) * 100
                 tp_yuzde = abs((tp - fiyat) / fiyat) * 100
                 
-                # MESAJI HAZIRLA
                 chart_link = f"https://www.tradingview.com/chart/?symbol=KUCOIN:{coin.replace('/', '')}"
                 mesaj = f"⚡ **NEUROTRADE {sinyal}**\n\n"
                 mesaj += f"💎 **Coin:** #{coin.split('/')[0]} (KuCoin)\n"
@@ -321,8 +302,7 @@ def calistir():
                 mesaj += f"🎯 **Hedef:** ${tp:.4f} (%{tp_yuzde:.2f})\n\n"
                 mesaj += f"📊 [TV Grafiği]({chart_link})"
 
-                # 3. ADIM: GRAFİĞİ ÇİZ VE GÖNDER 📸
-                print(f"📸 Grafik çiziliyor: {coin}...")
+                print(f"📸 Sinyal: {coin}")
                 grafik_buffer = grafik_olustur(df, coin, sinyal, fiyat, sl, tp)
                 
                 if grafik_buffer:
@@ -330,7 +310,6 @@ def calistir():
                 else:
                     telegram_gonder(mesaj)
                 
-                # Hafızaya Kaydet
                 hafiza[f"{coin}_{sinyal}"] = {
                     "sinyal": sinyal,
                     "zaman": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -340,15 +319,11 @@ def calistir():
                 hafiza_degisti = True
                 
             time.sleep(0.5) 
-        except Exception as e:
-            print(f"Hata ({coin}): {e}")
+        except:
             continue
     
     if hafiza_degisti:
         hafiza_kaydet(hafiza)
-        print("💾 Hafıza Güncellendi.")
-    else:
-        print("💤 Değişiklik yok.")
 
 if __name__ == "__main__":
     calistir()
