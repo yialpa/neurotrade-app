@@ -20,7 +20,7 @@ jobs:
 
     - name: Kütüphaneleri Yükle
       run: |
-        pip install ccxt pandas requests feedparser textblob numpy
+        pip install mplfinance ccxt pandas requests feedparser textblob numpy
 
     - name: Botu Calistir
       run: python beyin.py
