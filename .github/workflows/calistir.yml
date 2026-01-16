@@ -2,8 +2,8 @@ name: 7/24 Bot Devriyesi
 
 on:
   schedule:
-    - cron: '0 * * * *'  # Bu satır botu HER SAAT BAŞI çalıştırır (09:00, 10:00 vs.)
-  workflow_dispatch:      # Bu satır MANUEL butonun kalmasını sağlar
+    - cron: '*/15 * * * *'  # Her 15 dakikada bir çalışır
+  workflow_dispatch:
 
 jobs:
   build:
@@ -21,6 +21,7 @@ jobs:
     - name: Kütüphaneleri Yükle
       run: |
         pip install mplfinance ccxt pandas requests feedparser textblob numpy
+        # DİKKAT: pandas_ta SİLİNDİ. Sistem çok daha hafif.
 
     - name: Botu Calistir
       run: python beyin.py
