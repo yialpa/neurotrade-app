@@ -11,7 +11,7 @@ import mplfinance as mpf
 from datetime import datetime, timedelta
 
 # ==========================================
-# 🦅 NEUROTRADE V8.1 - HAFİF GÖRSEL ZEKA (No-Lib)
+# 🦅 NEUROTRADE V9.0 - SMART MONEY (FVG)
 # ==========================================
 
 # --- KİŞİSEL AYARLAR ---
@@ -32,14 +32,13 @@ KARI_KITLE_YUZDE = 1.0
 TARANACAK_COIN_SAYISI = 40  
 
 def telegram_foto_gonder(mesaj, resim_buffer):
-    """Grafikli Mesaj"""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
     files = {'photo': ('chart.png', resim_buffer, 'image/png')}
     data = {'chat_id': CHAT_ID, 'caption': mesaj, 'parse_mode': 'Markdown'}
     try:
         requests.post(url, files=files, data=data)
     except:
-        telegram_gonder(mesaj) # Foto gitmezse yazı at
+        telegram_gonder(mesaj)
 
 def telegram_gonder(mesaj):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -69,9 +68,8 @@ def hafiza_kaydet(hafiza):
     except:
         pass
 
-# --- TEKNİK HESAPLAMALAR (MANUEL - pandas_ta YOK) ---
+# --- TEKNİK HESAPLAMALAR ---
 def calculate_rsi(series, period=14):
-    """RSI Hesaplar (Kütüphanesiz)"""
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
@@ -79,13 +77,35 @@ def calculate_rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 def calculate_atr(df, period=14):
-    """ATR Hesaplar (Kütüphanesiz)"""
     high_low = df['high'] - df['low']
     high_close = np.abs(df['high'] - df['close'].shift())
     low_close = np.abs(df['low'] - df['close'].shift())
     ranges = pd.concat([high_low, high_close, low_close], axis=1)
     true_range = np.max(ranges, axis=1)
     return true_range.rolling(window=period).mean()
+
+# --- FVG TESPİTİ (YENİ ÖZELLİK) ---
+def detect_fvg(df):
+    """
+    Son 3 mum içinde Adil Değer Boşluğu (FVG) var mı bakar.
+    """
+    fvg_signal = None
+    
+    # Son kapanmış mumlara bakıyoruz (-2, -3, -4) çünkü -1 hala oluşuyor
+    # Bullish FVG: 1. Mumun Yükseği < 3. Mumun Düşüğü (Arada boşluk var)
+    candle_1_high = df['high'].iloc[-4]
+    candle_3_low = df['low'].iloc[-2]
+    
+    # Bearish FVG: 1. Mumun Düşüğü > 3. Mumun Yükseği
+    candle_1_low = df['low'].iloc[-4]
+    candle_3_high = df['high'].iloc[-2]
+
+    if candle_3_low > candle_1_high:
+        return "BULLISH_FVG"
+    elif candle_1_low > candle_3_high:
+        return "BEARISH_FVG"
+    
+    return None
 
 # --- GRAFİK ÇİZİCİ ---
 def grafik_olustur(df, coin, sinyal, giris, stop, hedef):
@@ -122,16 +142,13 @@ def en_iyi_coinleri_getir(exchange, limit=40):
     except:
         return ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT']
 
-# --- MTF ANALİZİ (MANUEL EMA) ---
+# --- MTF ANALİZİ ---
 def ana_trend_kontrol(exchange, coin):
     try:
         bars = exchange.fetch_ohlcv(coin, timeframe=ANA_TREND_PERIYODU, limit=50)
         df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        
-        # Manuel EMA 50
         ema50 = df['close'].ewm(span=50, adjust=False).mean().iloc[-1]
         fiyat = df['close'].iloc[-1]
-        
         return "YUKARI" if fiyat > ema50 else "ASAGI"
     except:
         return "NOTR"
@@ -143,7 +160,8 @@ def gunluk_rapor_kontrol(hafiza, market_duygusu, btc_fiyat):
     
     if son_rapor != bugun:
         mesaj = f"📅 **GÜNLÜK PATRON RAPORU**\n\n"
-        mesaj += f"✅ **Sistem:** V8.1 (Light Mode)\n"
+        mesaj += f"✅ **Sistem:** V9.0 (Smart Money)\n"
+        mesaj += f"🧠 **Yeni:** FVG (Boşluk) Analizi\n"
         mesaj += f"📸 **Görsel:** Grafik Aktif\n"
         mesaj += f"⏳ **MTF:** 4H Trend Kontrolü\n"
         mesaj += f"🌍 **Mod:** {market_duygusu}\n"
@@ -187,7 +205,6 @@ def pozisyon_takip(exchange, hafiza):
         except: continue
     return degisiklik_var
 
-# --- SPAM ENGEL ---
 def spam_kontrol(hafiza, coin, sinyal):
     key = f"{coin}_{sinyal}"
     if key in hafiza:
@@ -198,9 +215,9 @@ def spam_kontrol(hafiza, coin, sinyal):
             return True
     return False
 
-# --- ANA TEKNİK ANALİZ (MANUEL) ---
+# --- ANA TEKNİK ANALİZ (FVG DAHİL) ---
 def teknik_analiz(coin, df, ana_trend):
-    # Kütüphanesiz Hesaplamalar
+    # Hesaplamalar
     df['ATR'] = calculate_atr(df)
     df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
     df['ema20'] = df['close'].ewm(span=20, adjust=False).mean()
@@ -210,6 +227,8 @@ def teknik_analiz(coin, df, ana_trend):
     df['lowest_20'] = df['low'].rolling(window=20).min().shift(1)
     
     son_fiyat = df['close'].iloc[-1]
+    fvg_durumu = detect_fvg(df) # Yeni FVG Fonksiyonu
+    
     sinyal = None
     sl = 0.0
     tp = 0.0
@@ -219,21 +238,32 @@ def teknik_analiz(coin, df, ana_trend):
     ema20_val = df['ema20'].iloc[-1]
     ema50_val = df['ema50'].iloc[-1]
 
-    # STRATEJİLER
-    if ana_trend == "YUKARI" and ema20_val > ema50_val and 45 < current_rsi < 70:
-        if son_fiyat > df['highest_20'].iloc[-1]:
+    # --- LONG STRATEJİSİ ---
+    if ana_trend == "YUKARI" and 45 < current_rsi < 70:
+        # 1. FVG Tespit edildi mi?
+        if fvg_durumu == "BULLISH_FVG":
+            sinyal, setup_info = "LONG 🟢", "FVG (Boşluk Doldurma)"
+        # 2. BOS var mı?
+        elif son_fiyat > df['highest_20'].iloc[-1]:
             sinyal, setup_info = "LONG 🟢", "BOS (Yukarı Kırılım)"
-        elif abs(son_fiyat - ema50_val) / son_fiyat < 0.01:
+        # 3. Retest var mı?
+        elif abs(son_fiyat - ema50_val) / son_fiyat < 0.01 and ema20_val > ema50_val:
             sinyal, setup_info = "LONG 🟢", "Trend Desteği (Retest)"
         
         if sinyal:
             sl = son_fiyat - (df['ATR'].iloc[-1] * 1.5)
             tp = son_fiyat + ((son_fiyat - sl) * RISK_REWARD_RATIO)
 
-    elif ana_trend == "ASAGI" and ema20_val < ema50_val and 30 < current_rsi < 55:
-        if son_fiyat < df['lowest_20'].iloc[-1]:
+    # --- SHORT STRATEJİSİ ---
+    elif ana_trend == "ASAGI" and 30 < current_rsi < 55:
+        # 1. FVG Tespit edildi mi?
+        if fvg_durumu == "BEARISH_FVG":
+            sinyal, setup_info = "SHORT 🔴", "FVG (Boşluk Doldurma)"
+        # 2. BOS var mı?
+        elif son_fiyat < df['lowest_20'].iloc[-1]:
             sinyal, setup_info = "SHORT 🔴", "BOS (Aşağı Kırılım)"
-        elif abs(son_fiyat - ema50_val) / son_fiyat < 0.01:
+        # 3. Retest var mı?
+        elif abs(son_fiyat - ema50_val) / son_fiyat < 0.01 and ema20_val < ema50_val:
             sinyal, setup_info = "SHORT 🔴", "Trend Direnci (Retest)"
         
         if sinyal:
@@ -245,7 +275,7 @@ def teknik_analiz(coin, df, ana_trend):
 # --- ANA MOTOR ---
 def calistir():
     exchange = ccxt.kucoin()
-    print("🦅 NEUROTRADE V8.1 (Light & Visual) Başlatılıyor...")
+    print("🦅 NEUROTRADE V9.0 (Smart Money) Başlatılıyor...")
     
     try:
         feed = feedparser.parse("https://cointelegraph.com/rss")
@@ -274,10 +304,8 @@ def calistir():
 
     for coin in hedef_coinler:
         try:
-            # 1. MTF Kontrolü
             ana_trend = ana_trend_kontrol(exchange, coin)
             
-            # 2. İşlem Grafiği
             bars = exchange.fetch_ohlcv(coin, timeframe=TARAMA_PERIYODU, limit=100)
             df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
