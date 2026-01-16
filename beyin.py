@@ -8,6 +8,12 @@ import numpy as np
 import json
 from datetime import datetime, timedelta
 
+# ==========================================
+# 🦅 NEUROTRADE V7.6 - KUCOIN GEM HUNTER
+# ==========================================
+# NOT: GitHub (ABD) sunucularında Binance Global çalışmaz.
+# Bu yüzden Binance Global kadar güçlü ve hacimli olan KUCOIN'e geçtik.
+
 # --- KİŞİSEL AYARLAR ---
 TELEGRAM_TOKEN = "8537277587:AAFxzrDMS0TEun8m7aQmck480iKD2HohtQc" 
 CHAT_ID = "-1003516806415"
@@ -17,11 +23,12 @@ JSONBIN_API_KEY = "$2a$10$5cOoQOZABAJQlhbFtkjyk.pTqcw9gawnwvTfznf59FTmprp/cffV6"
 JSONBIN_BIN_ID = "696944b1d0ea881f406e6a0c"
 
 # --- STRATEJİ AYARLARI ---
-TARAMA_PERIYOTLARI = ['4h', '1h'] 
-RISK_REWARD_RATIO = 2.0 
-HAFIZA_SURESI_SAAT = 4 
-CEZA_SURESI_SAAT = 6 
-KARI_KITLE_YUZDE = 1.5 
+TARAMA_PERIYOTLARI = ['15m', '1h']  
+RISK_REWARD_RATIO = 2.0  
+HAFIZA_SURESI_SAAT = 4   
+CEZA_SURESI_SAAT = 6     
+KARI_KITLE_YUZDE = 1.0   
+TARANACAK_COIN_SAYISI = 40  # KuCoin'de çok coin var, 40 tane tarayalım 🔥
 
 def telegram_gonder(mesaj):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -51,35 +58,59 @@ def hafiza_kaydet(hafiza):
     except:
         pass
 
-# --- GÜNLÜK RAPOR MODÜLÜ ---
-def gunluk_rapor_kontrol(hafiza, market_duygusu, btc_fiyat):
+# --- HACİM AVCI MODÜLÜ (KUCOIN) ---
+def en_iyi_coinleri_getir(exchange, limit=40):
+    """KuCoin üzerindeki en yüksek hacimli USDT paritelerini çeker."""
+    try:
+        # KuCoin bazen API'de farklı davranabilir, güvenli çekim
+        tickers = exchange.fetch_tickers()
+        usdt_pairs = {
+            symbol: data for symbol, data in tickers.items() 
+            if symbol.endswith('/USDT') 
+            and 'USDC' not in symbol 
+            and 'DAI' not in symbol
+            and '3S' not in symbol # Kaldıraçlı tokenları temizle
+            and '3L' not in symbol
+        }
+        
+        # Quote Volume (İşlem Hacmi) değerine göre sırala
+        sorted_pairs = sorted(usdt_pairs.items(), key=lambda x: x[1]['quoteVolume'] if x[1]['quoteVolume'] else 0, reverse=True)
+        
+        # En çok işlem gören 'limit' kadar coini al
+        top_coins = [pair[0] for pair in sorted_pairs[:limit]]
+        print(f"🔥 Hacim Avcısı (KuCoin): En popüler {len(top_coins)} coin seçildi.")
+        return top_coins
+    except Exception as e:
+        print(f"Coin listesi alınamadı: {e}")
+        return ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'KAS/USDT', 'FET/USDT', 'RNDR/USDT', 'PEPE/USDT']
+
+# --- GÜNLÜK RAPOR ---
+def gunluk_rapor_kontrol(hafiza, market_duygusu, btc_fiyat, taranan_sayisi):
     bugun = datetime.now().strftime("%Y-%m-%d")
     son_rapor = hafiza.get("son_rapor_tarihi", "")
     
     if son_rapor != bugun:
         mesaj = f"📅 **GÜNLÜK PATRON RAPORU**\n\n"
-        mesaj += f"✅ **Sistem:** Aktif ve Çalışıyor\n"
+        mesaj += f"✅ **Sistem:** Aktif (V7.6 Gem Hunter)\n"
+        mesaj += f"💎 **Borsa:** KuCoin (Yüksek Hacim)\n"
+        mesaj += f"🔭 **Kapsama:** Top {taranan_sayisi} Coin\n"
         mesaj += f"🌍 **Piyasa Modu:** {market_duygusu}\n"
         mesaj += f"👑 **BTC Fiyatı:** ${btc_fiyat:.2f}\n"
-        mesaj += f"🛡️ **Güvenlik:** Korumalar Devrede\n\n"
-        mesaj += f"🤖 *Ben buradayım Kaptan, nöbetteyim.*"
+        mesaj += f"🛡️ **Güvenlik:** ATR Stop Devrede\n\n"
+        mesaj += f"🦅 *Binance Global kadar güçlü, GitHub dostu.*"
         
         telegram_gonder(mesaj)
         hafiza["son_rapor_tarihi"] = bugun
         return True 
     return False
 
-# --- KÂRI KİTLEME (TRAILING) MODÜLÜ (DÜZELTİLDİ) ---
+# --- KÂRI KİTLEME ---
 def pozisyon_takip(exchange, hafiza):
     degisiklik_var = False
-    
     keys = list(hafiza.keys()) 
     for key in keys:
         veri = hafiza[key]
-        
-        # --- DÜZELTME BURADA: Veri bir sözlük (Dictionary) değilse atla ---
-        if not isinstance(veri, dict):
-            continue 
+        if not isinstance(veri, dict): continue 
         
         coin_full = key.split("_")[0] 
         sinyal_tipi = veri.get('sinyal')
@@ -89,12 +120,10 @@ def pozisyon_takip(exchange, hafiza):
         
         if not giris_fiyati or kilitlendi: continue
 
-        # İşlem eskiyse geç
         try:
             islem_zamani = datetime.strptime(zaman_str, "%Y-%m-%d %H:%M:%S")
             if (datetime.now() - islem_zamani).total_seconds() > 86400: continue
-        except:
-            continue
+        except: continue
 
         try:
             ticker = exchange.fetch_ticker(coin_full)
@@ -103,23 +132,19 @@ def pozisyon_takip(exchange, hafiza):
             if sinyal_tipi == "LONG 🟢":
                 kar_orani = ((guncel_fiyat - giris_fiyati) / giris_fiyati) * 100
                 if kar_orani >= KARI_KITLE_YUZDE:
-                    telegram_gonder(f"🛡️ **RİSK SIFIRLANDI!** ({coin_full})\n\nFiyat %{kar_orani:.2f} yükseldi. Stop seviyesini **Giriş Fiyatına (Breakeven)** çek!\n\n💵 Giriş: {giris_fiyati}\n🚀 Şu an: {guncel_fiyat}")
+                    telegram_gonder(f"🛡️ **RİSK SIFIRLANDI!** ({coin_full})\n\nFiyat %{kar_orani:.2f} yükseldi. Stop --> Giriş.\n🚀 Şu an: {guncel_fiyat}")
                     hafiza[key]['kilitlendi'] = True
                     degisiklik_var = True
-            
             elif sinyal_tipi == "SHORT 🔴":
                 kar_orani = ((giris_fiyati - guncel_fiyat) / giris_fiyati) * 100
                 if kar_orani >= KARI_KITLE_YUZDE:
-                    telegram_gonder(f"🛡️ **RİSK SIFIRLANDI!** ({coin_full})\n\nFiyat %{kar_orani:.2f} düştü. Stop seviyesini **Giriş Fiyatına (Breakeven)** çek!\n\n💵 Giriş: {giris_fiyati}\n📉 Şu an: {guncel_fiyat}")
+                    telegram_gonder(f"🛡️ **RİSK SIFIRLANDI!** ({coin_full})\n\nFiyat %{kar_orani:.2f} düştü. Stop --> Giriş.\n📉 Şu an: {guncel_fiyat}")
                     hafiza[key]['kilitlendi'] = True
                     degisiklik_var = True
-                    
-        except:
-            continue
-            
+        except: continue
     return degisiklik_var
 
-# --- DİĞER MODÜLLER ---
+# --- ANALİZ MODÜLLERİ ---
 def gecmis_hatalari_kontrol_et(hafiza, coin, suanki_fiyat):
     ilgili_kayitlar = [val for key, val in hafiza.items() if coin in key and isinstance(val, dict)]
     if not ilgili_kayitlar: return False, ""
@@ -139,7 +164,6 @@ def spam_kontrol(hafiza, coin, sinyal, timeframe):
     if key in hafiza:
         son_veri = hafiza[key]
         if not isinstance(son_veri, dict): return False
-        
         last_signal = son_veri.get('sinyal')
         last_time = datetime.strptime(son_veri.get('zaman'), "%Y-%m-%d %H:%M:%S")
         if last_signal == sinyal and (datetime.now() - last_time) < timedelta(hours=HAFIZA_SURESI_SAAT):
@@ -152,13 +176,6 @@ def calculate_rsi(series, period=14):
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
     rs = gain / loss
     return 100 - (100 / (1 + rs))
-
-def btc_durumu(exchange):
-    try:
-        ticker = exchange.fetch_ticker('BTC/USDT')
-        return ticker['percentage'], ticker['last']
-    except:
-        return 0, 0
 
 def piyasa_duygusunu_olc():
     try:
@@ -177,7 +194,6 @@ def teknik_analiz(exchange, coin, df, btc_degisim):
     df['ema50'] = df['close'].ewm(span=50).mean()
     df['ema20'] = df['close'].ewm(span=20).mean()
     df['rsi'] = calculate_rsi(df['close'])
-    
     df['highest_20'] = df['high'].rolling(window=20).max().shift(1)
     df['lowest_20'] = df['low'].rolling(window=20).min().shift(1)
     
@@ -185,7 +201,7 @@ def teknik_analiz(exchange, coin, df, btc_degisim):
     balina_notu = "🐋 **BALİNA ALARMI**" if df['volume'].iloc[-1] > (hacim_ort * 3.0) else ""
 
     sinyal = None
-    tip = "Swing" if "4h" in str(df.name) else "Scalp"
+    tip = "Swing" if "1h" in str(df.name) else "Scalp"
     sl = 0.0
     tp = 0.0
     setup_info = ""
@@ -216,33 +232,43 @@ def teknik_analiz(exchange, coin, df, btc_degisim):
 
 # --- ANA MOTOR ---
 def calistir():
-    exchange = ccxt.binanceus() 
+    # 🔥 DEĞİŞİKLİK: KuCoin kullanıyoruz. ABD sunucusunda çalışır ve hacmi yüksektir.
+    exchange = ccxt.kucoin()
+    print("🦅 NEUROTRADE AI (V7.6 - KuCoin Mode) Başlatılıyor...")
+    
     market_duygusu = piyasa_duygusunu_olc()
-    btc_degisim, btc_fiyat = btc_durumu(exchange)
+    
+    try:
+        ticker = exchange.fetch_ticker('BTC/USDT')
+        btc_fiyat = ticker['last']
+        btc_degisim = ticker['percentage']
+    except:
+        btc_fiyat = 0
+        btc_degisim = 0
     
     hafiza = hafiza_yukle()
     hafiza_degisti = False
     
+    # 🔥 KuCoin'deki En Hacimli 40 Coin
+    hedef_coinler = en_iyi_coinleri_getir(exchange, limit=TARANACAK_COIN_SAYISI)
+    
     print(f"🌍 Piyasa: {market_duygusu} | BTC: ${btc_fiyat}")
+    print(f"🔭 Taranan Coin Sayısı: {len(hedef_coinler)}")
 
-    # RAPOR
-    if gunluk_rapor_kontrol(hafiza, market_duygusu, btc_fiyat):
+    if gunluk_rapor_kontrol(hafiza, market_duygusu, btc_fiyat, len(hedef_coinler)):
         hafiza_degisti = True
         print("📅 Günlük rapor gönderildi.")
 
-    # TAKİP
     if pozisyon_takip(exchange, hafiza):
         hafiza_degisti = True
         print("🛡️ Pozisyon takibi yapıldı.")
 
-    # TARAMA
-    hedef_coinler = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'AVAX/USDT', 'DOGE/USDT', 'LTC/USDT', 'LINK/USDT', 'XRP/USDT']
     raporlar = []
-
     for coin in hedef_coinler:
         for tf in TARAMA_PERIYOTLARI:
             try:
-                bars = exchange.fetch_ohlcv(coin, timeframe=tf, limit=200)
+                # KuCoin'de limit biraz daha düşük olabilir, 100 mum yeterli
+                bars = exchange.fetch_ohlcv(coin, timeframe=tf, limit=100)
                 df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 df.name = tf
                 fiyat = df['close'].iloc[-1]
@@ -256,22 +282,27 @@ def calistir():
                 
                 if sinyal:
                     if spam_kontrol(hafiza, coin, sinyal, tip):
-                        print(f"🚫 SPAM: {coin} - Hafızada var.")
+                        print(f"🚫 SPAM: {coin}")
                         continue 
 
                     if (sinyal == "LONG 🟢" and market_duygusu == "NEGATIF") or (sinyal == "SHORT 🔴" and market_duygusu == "POZITIF"):
                         continue
 
-                    symbol_clean = coin.replace('/', '')
-                    chart_link = f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol_clean}"
+                    # KuCoin linki farklıdır, onu düzelttik
+                    symbol_clean = coin.replace('/', '-').replace('USDT', 'USDT') 
+                    # KuCoin grafiği TradingView'da da var, genel linki kullanalım
+                    chart_link = f"https://www.tradingview.com/chart/?symbol=KUCOIN:{coin.replace('/', '')}"
+
+                    sl_percent = abs((fiyat - sl) / fiyat) * 100
+                    tp_percent = abs((tp - fiyat) / fiyat) * 100
 
                     mesaj = f"⚡ **NEUROTRADE {sinyal}** ({tip})\n\n"
-                    mesaj += f"💎 **Coin:** #{coin.split('/')[0]}\n"
+                    mesaj += f"💎 **Coin:** #{coin.split('/')[0]} (KuCoin)\n"
                     mesaj += f"🛠️ **Setup:** {setup}\n"
                     mesaj += f"💵 **Giriş:** ${fiyat:.4f}\n"
                     if balina: mesaj += f"{balina} 🚨\n"
-                    mesaj += f"🛑 **Stop:** ${sl:.4f}\n"
-                    mesaj += f"🎯 **Hedef:** ${tp:.4f}\n\n"
+                    mesaj += f"🛑 **Stop:** ${sl:.4f} (%{sl_percent:.2f})\n"
+                    mesaj += f"🎯 **Hedef:** ${tp:.4f} (%{tp_percent:.2f})\n\n"
                     mesaj += f"📊 **Analiz:**\n"
                     mesaj += f"• 🧱 Market Yapısı: {'Kırılım (BOS)' if 'BOS' in setup else 'Retest'}\n"
                     mesaj += f"• 🌡️ RSI Modu: Uygun\n\n"
@@ -287,7 +318,7 @@ def calistir():
                     }
                     hafiza_degisti = True
                     
-                time.sleep(0.5)
+                time.sleep(0.2) 
             except Exception as e:
                 print(f"Hata ({coin}): {e}")
                 continue
