@@ -11,7 +11,7 @@ import mplfinance as mpf
 from datetime import datetime, timedelta
 
 # ==========================================
-# 🦅 NEUROTRADE V11.0 - PATTERN MASTER
+# 🦅 NEUROTRADE V12.0 - STRUCTURE SAFE
 # ==========================================
 
 # --- KİŞİSEL AYARLAR ---
@@ -22,13 +22,17 @@ CHAT_ID = "-1003516806415"
 JSONBIN_API_KEY = "$2a$10$5cOoQOZABAJQlhbFtkjyk.pTqcw9gawnwvTfznf59FTmprp/cffV6"
 JSONBIN_BIN_ID = "696944b1d0ea881f406e6a0c"
 
-# --- STRATEJİ AYARLARI ---
+# --- STRATEJİ VE RİSK AYARLARI ---
 TARAMA_PERIYODU = '15m'       
 ANA_TREND_PERIYODU = '4h'     
 RISK_REWARD_RATIO = 2.0  
 HAFIZA_SURESI_SAAT = 4   
 KARI_KITLE_YUZDE = 1.0   
-TARANACAK_COIN_SAYISI = 40  
+TARANACAK_COIN_SAYISI = 40
+
+# 🔥 YENİ RİSK AYARLARI
+MAX_STOP_YUZDESI = 2.0   # Stop mesafesi %2'den fazlaysa işlemi iptal et
+STOP_BUFFER = 0.005      # Destek/Direnç arkasına %0.5 pay bırak (Stop Hunt yememek için)
 
 # --- TELEGRAM FONKSİYONLARI ---
 def telegram_foto_gonder(mesaj, resim_buffer):
@@ -105,67 +109,35 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-# --- 🔥 MUM FORMASYONLARI (CANDLESTICK PATTERNS) ---
+# --- MUM & GRAFİK FORMASYONLARI ---
 def detect_candle_patterns(df):
-    """Mumlara bakıp Doji, Çekiç vb. tanır"""
     row = df.iloc[-1]
     body = abs(row['close'] - row['open'])
     wick_upper = row['high'] - max(row['close'], row['open'])
     wick_lower = min(row['close'], row['open']) - row['low']
     total_len = row['high'] - row['low']
     
-    # Doji (Gövde çok küçük, kararsızlık)
-    if body <= total_len * 0.1:
-        return "DOJI (Kararsızlık)"
-    
-    # Hammer (Çekiç - Alt fitil uzun, gövde yukarıda) - Bullish
-    if wick_lower > (body * 2) and wick_upper < body:
-        return "HAMMER (Boğa Çekici)"
-    
-    # Marubozu (Gövde çok büyük, fitil yok) - Güçlü Trend
-    if body > total_len * 0.8:
-        return "MARUBOZU (Güçlü Mum)"
-
+    if body <= total_len * 0.1: return "DOJI (Kararsızlık)"
+    if wick_lower > (body * 2) and wick_upper < body: return "HAMMER (Boğa Çekici)"
+    if body > total_len * 0.8: return "MARUBOZU (Güçlü Mum)"
     return None
 
-# --- 🔥 GRAFİK FORMASYONLARI (CHART PATTERNS) ---
 def detect_chart_patterns(df):
-    """Fiyat hareketlerine bakıp TOBO, Flama vb. tanır"""
     closes = df['close'].values
-    highs = df['high'].values
     lows = df['low'].values
     
-    pattern = None
-    
-    # 1. BOĞA FLAMASI (BULL FLAG)
-    # Sert bir yükseliş (Direk) ve ardından yatay/hafif düşen bir kanal
-    direk_boyu = closes[-15] - closes[-25] # 10 mumluk bir direk
-    kanal_hareketi = closes[-1] - closes[-10] # Son 10 mum yatay
-    
+    direk_boyu = closes[-15] - closes[-25]
+    kanal_hareketi = closes[-1] - closes[-10]
     if direk_boyu > (closes[-25] * 0.03) and abs(kanal_hareketi) < (direk_boyu * 0.3):
          return "BOĞA FLAMASI (Bull Flag)"
 
-    # 2. TOBO (Ters Omuz Baş Omuz) - Dönüş Formasyonu
-    # Basitleştirilmiş: Dip -> Daha Derin Dip -> Daha Yüksek Dip
-    # Son 30 mumdaki 3 yerel dibe bakıyoruz
     try:
-        # Son 3 periyodu böl
-        p1 = min(lows[-30:-20]) # Sol Omuz Bölgesi
-        p2 = min(lows[-20:-10]) # Baş Bölgesi
-        p3 = min(lows[-10:])    # Sağ Omuz Bölgesi
-        
+        p1 = min(lows[-30:-20]) 
+        p2 = min(lows[-20:-10]) 
+        p3 = min(lows[-10:])    
         if p2 < p1 and p2 < p3 and p3 > p2:
-            # Sağ omuz sol omuza yakınsa
-            if abs(p1 - p3) / p1 < 0.02: 
-                return "TOBO (Dönüş Formasyonu)"
-                
-        # 3. İKİLİ DİP (Double Bottom - W)
-        if abs(p1 - p3) / p1 < 0.01 and p2 > p1: # Ortadaki tepe, dipler eşit
-             # W Formasyonu biraz daha complex, basit W kontrolü
-             pass
-    except:
-        pass
-
+            if abs(p1 - p3) / p1 < 0.02: return "TOBO (Dönüş Formasyonu)"
+    except: pass
     return None
 
 # --- SMART MONEY KONSEPTLERİ ---
@@ -238,12 +210,19 @@ def teknik_analiz(coin, df, ana_trend):
     df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
     df['ema20'] = df['close'].ewm(span=20, adjust=False).mean()
     df['rsi'] = calculate_rsi(df['close'])
+    
+    # 🔥 DESTEK / DİRENÇ (SWING POINTS) HESAPLAMA
+    # Son 20 mumun en düşüğü (Destek) ve en yükseği (Direnç)
+    swing_low = df['low'].rolling(window=20).min().iloc[-1]
+    swing_high = df['high'].rolling(window=20).max().iloc[-1]
+    
+    # BOS Kontrolü için bir önceki tepeler
     df['highest_20'] = df['high'].rolling(window=20).max().shift(1)
     df['lowest_20'] = df['low'].rolling(window=20).min().shift(1)
     
     son_fiyat = df['close'].iloc[-1]
     
-    # FORMASYON TARAMASI (YENİ ÖZELLİK)
+    # FORMASYONLAR
     mum_formasyonu = detect_candle_patterns(df)
     grafik_formasyonu = detect_chart_patterns(df)
     fvg_durumu = detect_fvg(df)
@@ -259,39 +238,40 @@ def teknik_analiz(coin, df, ana_trend):
     if grafik_formasyonu: ek_notlar.append(grafik_formasyonu)
 
     current_rsi = df['rsi'].iloc[-1]
-    ema20_val = df['ema20'].iloc[-1]
-    ema50_val = df['ema50'].iloc[-1]
 
     # --- LONG SİNYALLERİ ---
     if ana_trend == "YUKARI" and 45 < current_rsi < 70:
-        # Formasyon Teyidi varsa sinyal gücü artar
-        if grafik_formasyonu == "TOBO (Dönüş Formasyonu)":
-            sinyal, setup_info = "LONG 🟢", "TOBO Formasyonu"
-        elif grafik_formasyonu == "BOĞA FLAMASI (Bull Flag)":
-            sinyal, setup_info = "LONG 🟢", "Boğa Flaması"
-        elif ob_durumu == "BULLISH_OB":
-            sinyal, setup_info = "LONG 🟢", "Order Block (Kale)"
-        elif fvg_durumu == "BULLISH_FVG":
-            sinyal, setup_info = "LONG 🟢", "FVG (Boşluk Doldurma)"
-        elif son_fiyat > df['highest_20'].iloc[-1]:
-            sinyal, setup_info = "LONG 🟢", "BOS (Yukarı Kırılım)"
+        if grafik_formasyonu == "TOBO (Dönüş Formasyonu)": sinyal, setup_info = "LONG 🟢", "TOBO Formasyonu"
+        elif grafik_formasyonu == "BOĞA FLAMASI (Bull Flag)": sinyal, setup_info = "LONG 🟢", "Boğa Flaması"
+        elif ob_durumu == "BULLISH_OB": sinyal, setup_info = "LONG 🟢", "Order Block (Kale)"
+        elif fvg_durumu == "BULLISH_FVG": sinyal, setup_info = "LONG 🟢", "FVG (Boşluk Doldurma)"
+        elif son_fiyat > df['highest_20'].iloc[-1]: sinyal, setup_info = "LONG 🟢", "BOS (Yukarı Kırılım)"
         
         if sinyal:
-            sl = son_fiyat - (df['ATR'].iloc[-1] * 1.5)
+            # 🔥 YENİ STOP MANTIĞI: Destek Altı + Buffer
+            # Stopu swing low'un altına koyuyoruz, ATR yerine market yapısı kullanıyoruz
+            teknik_stop = swing_low * (1 - STOP_BUFFER) 
+            sl = teknik_stop
             tp = son_fiyat + ((son_fiyat - sl) * RISK_REWARD_RATIO)
 
     # --- SHORT SİNYALLERİ ---
     elif ana_trend == "ASAGI" and 30 < current_rsi < 55:
-        if ob_durumu == "BEARISH_OB":
-            sinyal, setup_info = "SHORT 🔴", "Order Block (Kale)"
-        elif fvg_durumu == "BEARISH_FVG":
-            sinyal, setup_info = "SHORT 🔴", "FVG (Boşluk Doldurma)"
-        elif son_fiyat < df['lowest_20'].iloc[-1]:
-            sinyal, setup_info = "SHORT 🔴", "BOS (Aşağı Kırılım)"
+        if ob_durumu == "BEARISH_OB": sinyal, setup_info = "SHORT 🔴", "Order Block (Kale)"
+        elif fvg_durumu == "BEARISH_FVG": sinyal, setup_info = "SHORT 🔴", "FVG (Boşluk Doldurma)"
+        elif son_fiyat < df['lowest_20'].iloc[-1]: sinyal, setup_info = "SHORT 🔴", "BOS (Aşağı Kırılım)"
         
         if sinyal:
-            sl = son_fiyat + (df['ATR'].iloc[-1] * 1.5)
+            # 🔥 YENİ STOP MANTIĞI: Direnç Üstü + Buffer
+            teknik_stop = swing_high * (1 + STOP_BUFFER)
+            sl = teknik_stop
             tp = son_fiyat - ((sl - son_fiyat) * RISK_REWARD_RATIO)
+
+    # 🔥 RİSK FİLTRESİ: Stop çok uzaksa işlemi iptal et
+    if sinyal and sl > 0:
+        stop_mesafesi_yuzde = abs((son_fiyat - sl) / son_fiyat) * 100
+        if stop_mesafesi_yuzde > MAX_STOP_YUZDESI:
+            # Risk uyarısı ile boş dönüyoruz (Console'a yazar ama Telegram atmaz)
+            return None, 0, 0, f"RİSKLİ ({stop_mesafesi_yuzde:.2f}%)", ""
 
     return sinyal, sl, tp, setup_info, ", ".join(ek_notlar)
 
@@ -301,9 +281,9 @@ def gunluk_rapor_kontrol(hafiza, market_duygusu, btc_fiyat):
     son_rapor = hafiza.get("son_rapor_tarihi", "")
     if son_rapor != bugun:
         mesaj = f"📅 **GÜNLÜK PATRON RAPORU**\n\n"
-        mesaj += f"✅ **Sistem:** V11.0 (Pattern Master)\n"
-        mesaj += f"📐 **Formasyonlar:** TOBO, Flama, Doji, Hammer\n"
-        mesaj += f"🧠 **Analiz:** FVG + Order Block + Haberler\n"
+        mesaj += f"✅ **Sistem:** V12.0 (Structure Safe)\n"
+        mesaj += f"🛡️ **Güvenlik:** Market Yapısı Stopu + Max Risk Filtresi\n"
+        mesaj += f"📐 **Analiz:** Formasyon + Smart Money + Haber\n"
         mesaj += f"🌍 **Mod:** {market_duygusu}\n"
         mesaj += f"👑 **BTC:** ${btc_fiyat:.2f}\n"
         telegram_gonder(mesaj)
@@ -352,7 +332,7 @@ def spam_kontrol(hafiza, coin, sinyal):
 # --- ANA MOTOR ---
 def calistir():
     exchange = ccxt.kucoin()
-    print("🦅 NEUROTRADE V11.0 (Pattern Master) Başlatılıyor...")
+    print("🦅 NEUROTRADE V12.0 (Structure Safe) Başlatılıyor...")
     market_duygusu = piyasa_haber_analizi()
     
     try:
@@ -376,10 +356,10 @@ def calistir():
             df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             
-            # Sinyal Analizi (Formasyonlar Dahil)
+            # Teknik Analiz (Risk Filtreli)
             sinyal, sl, tp, setup, ek_notlar = teknik_analiz(coin, df, ana_trend)
             
-            if sinyal:
+            if sinyal: # Eğer sinyal varsa (Ve risk filtresine takılmadıysa)
                 if spam_kontrol(hafiza, coin, sinyal): continue 
                 if (sinyal == "LONG 🟢" and market_duygusu == "NEGATIF"): continue
                 if (sinyal == "SHORT 🔴" and market_duygusu == "POZITIF"): continue
@@ -395,9 +375,9 @@ def calistir():
                 if ek_notlar: mesaj += f"🕯️ **Mum/Formasyon:** {ek_notlar}\n"
                 mesaj += f"⏳ **Ana Trend (4H):** {ana_trend}\n\n"
                 mesaj += f"💵 **Giriş:** ${fiyat:.4f}\n"
-                mesaj += f"🛑 **Stop:** ${sl:.4f} (%{sl_yuzde:.2f})\n"
+                mesaj += f"🛑 **Teknik Stop:** ${sl:.4f} (%{sl_yuzde:.2f})\n"
                 mesaj += f"🎯 **Hedef:** ${tp:.4f} (%{tp_yuzde:.2f})\n\n"
-                mesaj += f"📊 [TV Grafiği]({chart_link})"
+                mesaj += f"⚠️ *Not: Stop noktası en yakın destek/direnç arkasıdır.*"
 
                 print(f"📸 Sinyal: {coin} - {setup}")
                 grafik_buffer = grafik_olustur(df, coin, sinyal, fiyat, sl, tp)
@@ -409,6 +389,11 @@ def calistir():
                     "giris": fiyat, "kilitlendi": False 
                 }
                 hafiza_degisti = True
+            
+            # Eğer riskli olduğu için sinyal dönmediyse loga yaz
+            elif setup and "RİSKLİ" in setup:
+                print(f"🚫 {coin} - {setup} - Setup var ama Stop çok uzak.")
+
             time.sleep(0.5) 
         except: continue
     
