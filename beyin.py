@@ -11,7 +11,7 @@ import mplfinance as mpf
 from datetime import datetime, timedelta
 
 # ==========================================
-# 🦅 NEUROTRADE V12.0 - STRUCTURE SAFE
+# 🦅 NEUROTRADE V13.0 - FULL CYCLE (STOP/TP & LINKS)
 # ==========================================
 
 # --- KİŞİSEL AYARLAR ---
@@ -30,9 +30,9 @@ HAFIZA_SURESI_SAAT = 4
 KARI_KITLE_YUZDE = 1.0   
 TARANACAK_COIN_SAYISI = 40
 
-# 🔥 YENİ RİSK AYARLARI
-MAX_STOP_YUZDESI = 2.0   # Stop mesafesi %2'den fazlaysa işlemi iptal et
-STOP_BUFFER = 0.005      # Destek/Direnç arkasına %0.5 pay bırak (Stop Hunt yememek için)
+# 🔥 RİSK AYARLARI
+MAX_STOP_YUZDESI = 2.0   
+STOP_BUFFER = 0.005      
 
 # --- TELEGRAM FONKSİYONLARI ---
 def telegram_foto_gonder(mesaj, resim_buffer):
@@ -109,7 +109,7 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-# --- MUM & GRAFİK FORMASYONLARI ---
+# --- FORMASYONLAR ---
 def detect_candle_patterns(df):
     row = df.iloc[-1]
     body = abs(row['close'] - row['open'])
@@ -140,7 +140,6 @@ def detect_chart_patterns(df):
     except: pass
     return None
 
-# --- SMART MONEY KONSEPTLERİ ---
 def detect_fvg(df):
     try:
         if df['low'].iloc[-2] > df['high'].iloc[-4]: return "BULLISH_FVG"
@@ -154,14 +153,13 @@ def detect_order_block(df):
         prev_candle_red = df['close'].iloc[-2] < df['open'].iloc[-2]
         strong_move = abs(df['close'].iloc[-1] - df['open'].iloc[-1]) > (df['ATR'].iloc[-1] * 1.5)
         if last_candle_green and prev_candle_red and strong_move: return "BULLISH_OB"
-        
         last_candle_red = df['close'].iloc[-1] < df['open'].iloc[-1]
         prev_candle_green = df['close'].iloc[-2] > df['open'].iloc[-2]
         if last_candle_red and prev_candle_green and strong_move: return "BEARISH_OB"
     except: pass
     return None
 
-# --- GRAFİK ÇİZİCİ ---
+# --- GRAFİK ---
 def grafik_olustur(df, coin, sinyal, giris, stop, hedef):
     try:
         plot_df = df.tail(50).copy()
@@ -194,7 +192,6 @@ def ana_trend_kontrol(exchange, coin):
         return "YUKARI" if fiyat > ema50 else "ASAGI"
     except: return "NOTR"
 
-# --- SPAM ENGELLEYİCİ ---
 def spam_kontrol(hafiza, coin, sinyal):
     key = f"{coin}_{sinyal}"
     if key in hafiza:
@@ -204,25 +201,18 @@ def spam_kontrol(hafiza, coin, sinyal):
         if (datetime.now() - last_time) < timedelta(hours=HAFIZA_SURESI_SAAT): return True
     return False
 
-# --- ANA ANALİZ MOTORU ---
 def teknik_analiz(coin, df, ana_trend):
     df['ATR'] = calculate_atr(df)
     df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
     df['ema20'] = df['close'].ewm(span=20, adjust=False).mean()
     df['rsi'] = calculate_rsi(df['close'])
     
-    # 🔥 DESTEK / DİRENÇ (SWING POINTS) HESAPLAMA
-    # Son 20 mumun en düşüğü (Destek) ve en yükseği (Direnç)
     swing_low = df['low'].rolling(window=20).min().iloc[-1]
     swing_high = df['high'].rolling(window=20).max().iloc[-1]
-    
-    # BOS Kontrolü için bir önceki tepeler
     df['highest_20'] = df['high'].rolling(window=20).max().shift(1)
     df['lowest_20'] = df['low'].rolling(window=20).min().shift(1)
     
     son_fiyat = df['close'].iloc[-1]
-    
-    # FORMASYONLAR
     mum_formasyonu = detect_candle_patterns(df)
     grafik_formasyonu = detect_chart_patterns(df)
     fvg_durumu = detect_fvg(df)
@@ -239,7 +229,6 @@ def teknik_analiz(coin, df, ana_trend):
 
     current_rsi = df['rsi'].iloc[-1]
 
-    # --- LONG SİNYALLERİ ---
     if ana_trend == "YUKARI" and 45 < current_rsi < 70:
         if grafik_formasyonu == "TOBO (Dönüş Formasyonu)": sinyal, setup_info = "LONG 🟢", "TOBO Formasyonu"
         elif grafik_formasyonu == "BOĞA FLAMASI (Bull Flag)": sinyal, setup_info = "LONG 🟢", "Boğa Flaması"
@@ -248,42 +237,34 @@ def teknik_analiz(coin, df, ana_trend):
         elif son_fiyat > df['highest_20'].iloc[-1]: sinyal, setup_info = "LONG 🟢", "BOS (Yukarı Kırılım)"
         
         if sinyal:
-            # 🔥 YENİ STOP MANTIĞI: Destek Altı + Buffer
-            # Stopu swing low'un altına koyuyoruz, ATR yerine market yapısı kullanıyoruz
             teknik_stop = swing_low * (1 - STOP_BUFFER) 
             sl = teknik_stop
             tp = son_fiyat + ((son_fiyat - sl) * RISK_REWARD_RATIO)
 
-    # --- SHORT SİNYALLERİ ---
     elif ana_trend == "ASAGI" and 30 < current_rsi < 55:
         if ob_durumu == "BEARISH_OB": sinyal, setup_info = "SHORT 🔴", "Order Block (Kale)"
         elif fvg_durumu == "BEARISH_FVG": sinyal, setup_info = "SHORT 🔴", "FVG (Boşluk Doldurma)"
         elif son_fiyat < df['lowest_20'].iloc[-1]: sinyal, setup_info = "SHORT 🔴", "BOS (Aşağı Kırılım)"
         
         if sinyal:
-            # 🔥 YENİ STOP MANTIĞI: Direnç Üstü + Buffer
             teknik_stop = swing_high * (1 + STOP_BUFFER)
             sl = teknik_stop
             tp = son_fiyat - ((sl - son_fiyat) * RISK_REWARD_RATIO)
 
-    # 🔥 RİSK FİLTRESİ: Stop çok uzaksa işlemi iptal et
     if sinyal and sl > 0:
         stop_mesafesi_yuzde = abs((son_fiyat - sl) / son_fiyat) * 100
         if stop_mesafesi_yuzde > MAX_STOP_YUZDESI:
-            # Risk uyarısı ile boş dönüyoruz (Console'a yazar ama Telegram atmaz)
             return None, 0, 0, f"RİSKLİ ({stop_mesafesi_yuzde:.2f}%)", ""
 
     return sinyal, sl, tp, setup_info, ", ".join(ek_notlar)
 
-# --- RAPORLAMA ---
 def gunluk_rapor_kontrol(hafiza, market_duygusu, btc_fiyat):
     bugun = datetime.now().strftime("%Y-%m-%d")
     son_rapor = hafiza.get("son_rapor_tarihi", "")
     if son_rapor != bugun:
         mesaj = f"📅 **GÜNLÜK PATRON RAPORU**\n\n"
-        mesaj += f"✅ **Sistem:** V12.0 (Structure Safe)\n"
-        mesaj += f"🛡️ **Güvenlik:** Market Yapısı Stopu + Max Risk Filtresi\n"
-        mesaj += f"📐 **Analiz:** Formasyon + Smart Money + Haber\n"
+        mesaj += f"✅ **Sistem:** V13.0 (Full Cycle)\n"
+        mesaj += f"🛡️ **Yeni:** Stop/TP Takibi & Linkler\n"
         mesaj += f"🌍 **Mod:** {market_duygusu}\n"
         mesaj += f"👑 **BTC:** ${btc_fiyat:.2f}\n"
         telegram_gonder(mesaj)
@@ -291,48 +272,77 @@ def gunluk_rapor_kontrol(hafiza, market_duygusu, btc_fiyat):
         return True 
     return False
 
+# --- İŞLEM TAKİBİ (YENİ: STOP & TP & LINK EKLENDİ) ---
 def pozisyon_takip(exchange, hafiza):
     degisiklik_var = False
+    silinecekler = [] 
     keys = list(hafiza.keys()) 
+    
     for key in keys:
         veri = hafiza[key]
         if not isinstance(veri, dict): continue 
+        
         coin_full = key.split("_")[0] 
-        sinyal_tipi = veri.get('sinyal')
-        giris_fiyati = veri.get('giris')
+        sinyal = veri.get('sinyal')
+        giris = veri.get('giris')
+        sl = veri.get('sl', 0) # Hafızadan Stop al
+        tp = veri.get('tp', 0) # Hafızadan Hedef al
         kilitlendi = veri.get('kilitlendi', False) 
-        if not giris_fiyati or kilitlendi: continue
+        
+        if not giris: continue
+
         try:
             ticker = exchange.fetch_ticker(coin_full)
-            guncel_fiyat = ticker['last']
-            if sinyal_tipi == "LONG 🟢":
-                kar_orani = ((guncel_fiyat - giris_fiyati) / giris_fiyati) * 100
+            fiyat = ticker['last']
+            
+            # TV Linkini hazırla
+            chart_link = f"https://www.tradingview.com/chart/?symbol=KUCOIN:{coin_full.replace('/', '')}"
+
+            # 1. STOP LOSS KONTROLÜ
+            stop_oldu = False
+            if sinyal == "LONG 🟢" and sl > 0 and fiyat <= sl: stop_oldu = True
+            elif sinyal == "SHORT 🔴" and sl > 0 and fiyat >= sl: stop_oldu = True
+            
+            if stop_oldu:
+                telegram_gonder(f"❌ **STOP OLDUK!** ({coin_full})\n📉 Fiyat: {fiyat}\n📍 Giriş: {giris} | Stop: {sl}\n🔗 [Grafiği Aç]({chart_link})")
+                silinecekler.append(key)
+                degisiklik_var = True
+                continue
+
+            # 2. TAKE PROFIT KONTROLÜ
+            hedef_geldi = False
+            if sinyal == "LONG 🟢" and tp > 0 and fiyat >= tp: hedef_geldi = True
+            elif sinyal == "SHORT 🔴" and tp > 0 and fiyat <= tp: hedef_geldi = True
+            
+            if hedef_geldi:
+                telegram_gonder(f"✅ **HEDEF GELDİ!** ({coin_full})\n💰 Fiyat: {fiyat}\n📍 Hedef: {tp}\n🔗 [Grafiği Aç]({chart_link})")
+                silinecekler.append(key)
+                degisiklik_var = True
+                continue
+
+            # 3. BREAKEVEN (KÂRI KİTLEME)
+            if not kilitlendi:
+                kar_orani = 0
+                if sinyal == "LONG 🟢": kar_orani = ((fiyat - giris) / giris) * 100
+                elif sinyal == "SHORT 🔴": kar_orani = ((giris - fiyat) / giris) * 100
+                
                 if kar_orani >= KARI_KITLE_YUZDE:
-                    telegram_gonder(f"🛡️ **RİSK SIFIRLANDI!** ({coin_full})\nFiyat %{kar_orani:.2f} yükseldi. Stop --> Giriş.")
+                    telegram_gonder(f"🛡️ **RİSK SIFIRLANDI!** ({coin_full})\nFiyat %{kar_orani:.2f} kârda. Stop --> Giriş.\n🔗 [Grafiği Aç]({chart_link})")
                     hafiza[key]['kilitlendi'] = True
+                    hafiza[key]['sl'] = giris # Stopu güncelle
                     degisiklik_var = True
-            elif sinyal_tipi == "SHORT 🔴":
-                kar_orani = ((giris_fiyati - guncel_fiyat) / giris_fiyati) * 100
-                if kar_orani >= KARI_KITLE_YUZDE:
-                    telegram_gonder(f"🛡️ **RİSK SIFIRLANDI!** ({coin_full})\nFiyat %{kar_orani:.2f} düştü. Stop --> Giriş.")
-                    hafiza[key]['kilitlendi'] = True
-                    degisiklik_var = True
+
         except: continue
+        
+    # Biten işlemleri hafızadan sil
+    for key in silinecekler:
+        if key in hafiza: del hafiza[key]
+
     return degisiklik_var
 
-def spam_kontrol(hafiza, coin, sinyal):
-    key = f"{coin}_{sinyal}"
-    if key in hafiza:
-        son_veri = hafiza[key]
-        if not isinstance(son_veri, dict): return False
-        last_time = datetime.strptime(son_veri.get('zaman'), "%Y-%m-%d %H:%M:%S")
-        if (datetime.now() - last_time) < timedelta(hours=HAFIZA_SURESI_SAAT): return True
-    return False
-
-# --- ANA MOTOR ---
 def calistir():
     exchange = ccxt.kucoin()
-    print("🦅 NEUROTRADE V12.0 (Structure Safe) Başlatılıyor...")
+    print("🦅 NEUROTRADE V13.0 (Full Cycle) Başlatılıyor...")
     market_duygusu = piyasa_haber_analizi()
     
     try:
@@ -356,10 +366,9 @@ def calistir():
             df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             
-            # Teknik Analiz (Risk Filtreli)
             sinyal, sl, tp, setup, ek_notlar = teknik_analiz(coin, df, ana_trend)
             
-            if sinyal: # Eğer sinyal varsa (Ve risk filtresine takılmadıysa)
+            if sinyal:
                 if spam_kontrol(hafiza, coin, sinyal): continue 
                 if (sinyal == "LONG 🟢" and market_duygusu == "NEGATIF"): continue
                 if (sinyal == "SHORT 🔴" and market_duygusu == "POZITIF"): continue
@@ -377,23 +386,19 @@ def calistir():
                 mesaj += f"💵 **Giriş:** ${fiyat:.4f}\n"
                 mesaj += f"🛑 **Teknik Stop:** ${sl:.4f} (%{sl_yuzde:.2f})\n"
                 mesaj += f"🎯 **Hedef:** ${tp:.4f} (%{tp_yuzde:.2f})\n\n"
-                mesaj += f"⚠️ *Not: Stop noktası en yakın destek/direnç arkasıdır.*"
+                mesaj += f"🔗 [TV Grafiğini Aç]({chart_link})"
 
                 print(f"📸 Sinyal: {coin} - {setup}")
                 grafik_buffer = grafik_olustur(df, coin, sinyal, fiyat, sl, tp)
                 if grafik_buffer: telegram_foto_gonder(mesaj, grafik_buffer)
                 else: telegram_gonder(mesaj)
                 
+                # Hafızaya SL ve TP ile kaydet
                 hafiza[f"{coin}_{sinyal}"] = {
                     "sinyal": sinyal, "zaman": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "giris": fiyat, "kilitlendi": False 
+                    "giris": fiyat, "sl": sl, "tp": tp, "kilitlendi": False 
                 }
                 hafiza_degisti = True
-            
-            # Eğer riskli olduğu için sinyal dönmediyse loga yaz
-            elif setup and "RİSKLİ" in setup:
-                print(f"🚫 {coin} - {setup} - Setup var ama Stop çok uzak.")
-
             time.sleep(0.5) 
         except: continue
     
